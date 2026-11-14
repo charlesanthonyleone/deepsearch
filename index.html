@@ -81,7 +81,9 @@
       <p class="qb-hint">End a word with <code>*</code> to match by prefix, e.g. <code>light*</code>. AND fields must all hold, OR needs any one, NOT never.</p>
       <div class="qb-actions"><button type="button" id="qbApply">Use query</button><button type="button" id="qbDive" class="primary">Use &amp; dive</button><button type="button" id="qbClear" class="ghost">Clear</button></div>
     </div>
+    <div class="sheet-scrim" id="sheetScrim" hidden></div>
     <div class="controls">
+      <div class="sheet-head"><span class="sheet-grip" aria-hidden="true"></span><span class="lbl">Engines &amp; filters</span><button type="button" class="icon-btn" id="sheetClose" aria-label="Close filters">✕</button></div>
       <div class="tabs-row">
         <span class="seg-group tabs" id="cat" role="tablist" aria-label="Category">
           <button type="button" data-v="general">Web</button><button type="button" data-v="images">Images</button><button type="button" data-v="videos">Videos</button>
@@ -116,7 +118,7 @@
         <label class="ctl seg" aria-label="Sort">
           <span class="lbl">Sort</span>
           <span class="seg-group" id="sort">
-            <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button><button type="button" data-v="rarity">Rarity</button><button type="button" data-v="oldest">Oldest</button>
+            <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button><button type="button" data-v="rarity">Rarity</button><button type="button" data-v="leastviewed">Least viewed</button><button type="button" data-v="oldest">Oldest</button><button type="button" data-v="newest">Newest</button>
           </span>
         </label>
         <label class="ctl toggle" title="The whole expression must hold literally: every required term in the title, snippet or URL"><input type="checkbox" id="strict"><span class="sw"></span><span class="lbl">Strict</span></label>
@@ -124,6 +126,12 @@
           <span class="lbl">Min match <b id="minVal">0</b><small>%</small></span>
           <input type="range" id="minm" min="0" max="100" step="5" value="0">
         </label>
+        <label class="ctl toggle" title="Pinpoint: implies Strict, and every term must be in the title, alt text or URL path"><input type="checkbox" id="pin"><span class="sw"></span><span class="lbl">Pinpoint</span></label>
+        <label class="ctl seg near" title="All terms must sit within N words of each other"><span class="lbl">Within</span>
+          <select id="near" aria-label="Proximity window"><option value="0">any distance</option><option value="3">3 words</option><option value="5">5 words</option><option value="10">10 words</option><option value="20">20 words</option><option value="50">50 words</option></select>
+        </label>
+        <label class="ctl toggle" title="Also search the query translated into Spanish, Portuguese, German, French, Italian and Russian"><input type="checkbox" id="langx"><span class="sw"></span><span class="lbl">Expand languages</span></label>
+        <label class="ctl toggle" title="Collapse identical images found on different sites (perceptual hash)"><input type="checkbox" id="dupes"><span class="sw"></span><span class="lbl">Collapse duplicates</span></label>
         <label class="ctl toggle" title="Hide results you've opened or dismissed"><input type="checkbox" id="hideSeen"><span class="sw"></span><span class="lbl">Hide seen</span></label>
         <label class="ctl toggle"><input type="checkbox" id="dedupe"><span class="sw"></span><span class="lbl">One per domain</span></label>
       </div>
@@ -143,6 +151,7 @@
   <div class="status-wrap"><section class="status" id="status" aria-live="polite"></section><button type="button" class="save-search" id="saveSearch" hidden>☆ Save search</button></div>
   <section class="facets" id="facets" hidden></section>
   <section class="results" id="results"></section>
+  <button type="button" class="dig-more" id="digMore" hidden><span>DIG DEEPER</span><small>load the next pages</small></button>
   <div class="sentinel" id="sentinel"><span class="loader" id="loader" hidden><i></i><i></i><i></i></span></div>
 </main>
 

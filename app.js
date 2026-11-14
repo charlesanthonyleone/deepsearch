@@ -35,7 +35,7 @@ const state = {
   sort: LS.get("sort", "relevance"),
   dedupe: LS.get("dedupe", false),
   views: LS.get("views", { general: "list", images: "grid", videos: "grid" }), thumbProxy: CFG.thumbProxy === undefined ? "auto" : CFG.thumbProxy,
-  hideSeen: LS.get("hideSeen", false), exclude: LS.get("exclude", ""), saved: LS.get("saved", []), activeSaved: null, knownSnap: null,
+  hideSeen: LS.get("hideSeen", false), pin: LS.get("pin", false), near: LS.get("near", 0), langx: LS.get("langx", false), dupes: LS.get("dupes", false), dedupeInfo: null, exclude: LS.get("exclude", ""), saved: LS.get("saved", []), activeSaved: null, knownSnap: null,
   cat: LS.get("cat", "general"), phrase: LS.get("phrase", false), dated: LS.get("dated", false), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
@@ -172,7 +172,8 @@ function seg(sel, val, cb) {
   g.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; paint(b.dataset.v); cb(b.dataset.v); });
 }
 seg("#safe", state.safe, v => { state.safe = +v; LS.set("safe", state.safe); if (state.q) runSearch(); });
-seg("#sort", state.sort, v => { state.sort = v; LS.set("sort", v); render(true); });
+const SERVER_SORTS = ["rarity", "leastviewed", "oldest", "newest"];
+seg("#sort", state.sort, v => { const prev = state.sort; state.sort = v; LS.set("sort", v); if (isGateway() && state.q && (SERVER_SORTS.includes(v) || SERVER_SORTS.includes(prev))) runSearch(true); else render(true); });
 const dig = $("#dig");
 function paintDig() {
   dig.value = state.dig; $("#digVal").textContent = state.dig; $("#digS").textContent = state.dig > 1 ? "s" : "";
@@ -259,8 +260,15 @@ $("#results").addEventListener("click", e => {
 });
 $("#results").addEventListener("auxclick", e => { const a = e.target.closest(".card a[href]"); if (a && e.button === 1) { markSeen(a.closest(".card").dataset.url); a.closest(".card").classList.add("seen"); } });
 
+/* server precision toggles */
+function bindToggle(id, key) { const el = $("#" + id); el.checked = !!state[key]; el.addEventListener("change", () => { state[key] = el.checked; LS.set(key, el.checked); if (state.q) runSearch(true); }); }
+bindToggle("pin", "pin"); bindToggle("langx", "langx"); bindToggle("dupes", "dupes");
+const nearSel = $("#near"); nearSel.value = String(state.near || 0);
+nearSel.addEventListener("change", () => { state.near = +nearSel.value; LS.set("near", state.near); if (state.q) runSearch(true); });
+
 /* always exclude (settings drawer) */
-function excludeTerms() { const out = []; String(state.exclude || "").replace(/"([^"]+)"|([^,\s]+)/g, (m, p, w) => { const t = (p || w || "").trim().replace(/^-+/, ""); if (t) out.push(p ? `-"${t}"` : "-" + t); return m; }); return out; }
+function excludeList() { const out = []; String(state.exclude || "").replace(/"([^"]+)"|([^,]+)/g, (m, p, w) => { const t = (p || w || "").trim().replace(/^-+/, ""); if (t) out.push(t); return m; }); return out.slice(0, 20); }
+function excludeTerms() { if (isGateway()) return []; const out = []; String(state.exclude || "").replace(/"([^"]+)"|([^,\s]+)/g, (m, p, w) => { const t = (p || w || "").trim().replace(/^-+/, ""); if (t) out.push(p ? `-"${t}"` : "-" + t); return m; }); return out; }
 
 /* saved searches + creator follows: rerun on open, count results not seen in that search before */
 const saveBtn = $("#saveSearch");
@@ -278,7 +286,7 @@ saveBtn.onclick = () => {
 };
 function addFollow(name) {
   name = name.replace(/"/g, "").trim(); if (!name) return;
-  const q = `"${name}"`, cat = state.cat === "general" ? "videos" : state.cat;
+  const q = name, cat = state.cat === "general" ? "videos" : state.cat;
   if (findSaved(q, cat)) return;
   state.saved.unshift({ id: Date.now().toString(36), type: "creator", label: name, q, cat, known: [], newCount: 0, lastRun: 0 });
   persistSaved(); renderSaved(); checkSaved([state.saved[0]]);
@@ -302,8 +310,9 @@ function renderSaved() {
   }
 }
 function savedUrl(s) {
-  const keep = { cat: state.cat, phrase: state.phrase, facets: state.facets };
+  const keep = { cat: state.cat, phrase: state.phrase, facets: state.facets, sort: state.sort };
   state.cat = s.cat; state.facets = new Set();
+  if (s.type === "creator") { state.phrase = true; state.sort = "newest"; }
   const u = buildUrl([s.q, ...excludeTerms()].join(" "), 1);
   Object.assign(state, keep); return u;
 }
@@ -331,6 +340,10 @@ function openSaved(s) {
   state.cat = s.cat; LS.set("cat", s.cat);
   $("#cat").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === s.cat)); renderEngines(); paintView(curView());
   qi.value = s.q; state.activeSaved = s; state.knownSnap = new Set(s.known || []);
+  if (s.type === "creator") {
+    state.phrase = true; LS.set("phrase", true); phraseBtn.setAttribute("aria-pressed", "true");
+    state.sort = "newest"; LS.set("sort", "newest"); $("#sort").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === "newest"));
+  }
   runSearch();
 }
 function settleSaved() {
@@ -444,6 +457,12 @@ function buildUrl(q, page) {
     if (state.time) { p.set("time", state.time); if (state.dated) p.set("dated", "1"); }
     if (state.strict) p.set("strict", "1");
     if (state.phrase) p.set("phrase", "1");
+    if (state.pin) p.set("pin", "1");
+    if (state.near >= 2) p.set("near", String(state.near));
+    if (state.langx) p.set("lang_expand", "1");
+    if (state.dupes) p.set("dedupe", "1");
+    const ex = excludeList(); if (ex.length) p.set("exclude", ex.join(","));
+    if (["rarity", "leastviewed", "oldest", "newest"].includes(state.sort)) p.set("sort", state.sort);
     if (state.minm) p.set("minMatch", String(state.minm));
     if (state.facets.size) p.set("domains", [...state.facets].slice(0, 20).join(","));
   } else p.set("engines", enabledEngines().join(","));
@@ -489,13 +508,16 @@ function normalize(raw, apiPage) {
     host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
     proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
     resolution: raw.resolution || null, date: raw.publishedDate ? Date.parse(raw.publishedDate) || null : null,
-    dupes: +(raw.duplicates || raw.collapsed || raw.dupes || 0) || 0,
+    dupes: 0, dupList: Array.isArray(raw.duplicates) ? raw.duplicates.filter(d => d && d.url) : [],
+    views: typeof raw.views === "number" ? raw.views : null, rarity: typeof raw.rarity === "number" ? raw.rarity : null,
+    langs: Array.isArray(raw.langs) ? raw.langs.filter(l => l && l !== "orig") : [], alt: raw.alt || "",
     thumb: safeUrl(raw.thumbnail || raw.thumbnail_src || raw.img_src || ""),
     img: safeUrl(raw.img_src || raw.image || ""),
     kind: raw.kind === "videos" ? "video" : raw.kind === "images" ? "image" : raw.kind === "web" ? "web" : raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
     length: fmtLen(raw.length), match: raw.match || null
   };
 }
+function fmtViews(n) { return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K" : String(n); }
 function fmtLen(v) {
   if (v == null || v === "") return null;
   if (typeof v === "number" || /^\d+(\.\d+)?$/.test(String(v))) { let s = Math.round(+v), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s %= 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
@@ -533,8 +555,9 @@ async function runSearch(keepFacets) {
   if (!q) return;
   if (state.activeSaved && savedKey(state.activeSaved.q, state.activeSaved.cat) !== savedKey(qi.value, state.cat)) { state.activeSaved = null; state.knownSnap = null; }
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
-  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null;
+  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null; state.dedupeInfo = null;
   if (ctrl) ctrl.abort();
+  ctrl = null; state.loading = false; state.autoPages = 0; state.paused = false;   // a new search never waits behind the old one
   document.body.classList.add("diving");
   const u = new URL(location.href); u.hash = "q=" + encodeURIComponent(qi.value.trim()); history.replaceState(null, "", u);
   $("#results").innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
@@ -542,16 +565,25 @@ async function runSearch(keepFacets) {
   const r = qi.getBoundingClientRect(); ping(r.left + 20, r.top + r.height / 2, true);
   await loadMore(true);
 }
-async function loadMore(first) {
+const AUTO_PAGES = 3;   // infinite scroll stops after this many automatic steps until "Dig deeper" is tapped
+async function loadMore(first, manual) {
   if (state.loading || !state.hasMore || !state.q) return;
+  if (!first && !manual && state.autoPages >= AUTO_PAGES) { state.paused = true; paintDigMore(); return; }
+  if (!first) { if (manual) state.autoPages = 0; else state.autoPages++; }
+  state.paused = false; paintDigMore();
   state.loading = true; document.body.classList.add("busy"); $("#loader").hidden = first;
-  const seq = state.seq; ctrl = new AbortController();
-  // Deep Dig: each step pulls `dig` upstream pages per engine.
+  const seq = state.seq, my = new AbortController(); ctrl = my;
+  // Deep Dig: each step pulls `dig` upstream pages per engine, fetched one page at a time.
   const pages = [];
   if (isGateway() && state.dig >= 5) pages.push(state.nextPage);
   else for (let i = 0; i < state.dig && state.nextPage + i <= 20; i++) pages.push(state.nextPage + i);
   let err = null, anyMore = false, got = 0;
-  const settled = await Promise.allSettled(pages.map(p => apiFetch(buildUrl(state.q, p), ctrl.signal).then(j => ({ j, p }))));
+  const settled = [];
+  for (const p of pages) {
+    if (seq !== state.seq) return;                      // superseded: the new search owns state.loading now
+    try { settled.push({ status: "fulfilled", value: { j: await apiFetch(buildUrl(state.q, p), my.signal), p } }); }
+    catch (e) { settled.push({ status: "rejected", reason: e }); if (e.name === "AbortError" || /Rate/.test(e.message)) break; }
+  }
   if (seq !== state.seq) return;
   const pq = pq0();
   for (const s of settled) {
@@ -560,6 +592,7 @@ async function loadMore(first) {
     if (!isGateway() && state.cat !== "general" && j.category && j.category !== state.cat) state.catMismatch = j.category;
     if (isGateway() && Array.isArray(j.categories) && !j.categories.includes(KIND[state.cat])) state.catMismatch = j.categories.join(",");
     if (j.facets && Array.isArray(j.facets.domains) && !state.facets.size) mergeFacets(j.facets.domains);
+    if (j.dedupe && typeof j.dedupe === "object") { state.dedupeInfo = state.dedupeInfo || { hashed: 0, collapsed: 0 }; state.dedupeInfo.hashed += +j.dedupe.hashed || 0; state.dedupeInfo.collapsed += +j.dedupe.collapsed || 0; }
     if (j.dropped) { state.dropped = state.dropped || {}; for (const [k, v] of Object.entries(j.dropped)) state.dropped[k] = (state.dropped[k] || 0) + (+v || 0); }
     if (isGateway()) { if (j.hasMore) anyMore = true; }
     else if ((j.results || []).length) anyMore = true;
@@ -581,7 +614,8 @@ async function loadMore(first) {
   state.nextPage += isGateway() && state.dig >= 5 ? 1 : pages.length;
   state.hasMore = anyMore && state.nextPage <= 20 && !(err && !got);
   state.loading = false; document.body.classList.remove("busy"); $("#loader").hidden = true;
-  renderEngines();
+  if (ctrl === my) ctrl = null;
+  renderEngines(); paintDigMore();
   render(first, err);
   setDepth(); paintSaveBtn();
   if (first && !err && state.activeSaved) settleSaved();
@@ -631,11 +665,13 @@ function sorted() {
   renderFacets(list);
   if (state.facets.size && !gw) list = list.filter(r => state.facets.has(r.domain || r.host));
   if (state.hideSeen) list = list.filter(r => !seen.has(r.url));
-  const rar = r => { const ps = r.sources.map(s => s.pos).filter(x => x != null); return Math.log2(1 + (ps.length ? Math.min(...ps) : 10)) / Math.max(1, r.engines.length); };
+  const rar = r => r.rarity != null ? r.rarity : (() => { const ps = r.sources.map(s => s.pos).filter(x => x != null); return 100 * Math.log2(1 + (ps.length ? Math.min(...ps) : 10)) / Math.max(1, r.engines.length) / 6; })();
   const cmp = {
     buried: (a, b) => b.b - a.b || a.idx - b.idx,
     rarity: (a, b) => rar(b) - rar(a) || a.idx - b.idx,
-    oldest: (a, b) => (a.date ?? Infinity) - (b.date ?? Infinity) || a.idx - b.idx
+    leastviewed: (a, b) => (a.views ?? Infinity) - (b.views ?? Infinity) || a.idx - b.idx,
+    oldest: (a, b) => (a.date ?? Infinity) - (b.date ?? Infinity) || a.idx - b.idx,
+    newest: (a, b) => (b.date ?? -Infinity) - (a.date ?? -Infinity) || a.idx - b.idx
   }[state.sort] || ((a, b) => a.idx - b.idx);
   list.sort(cmp);
   if (state.dedupe) {
@@ -671,8 +707,11 @@ function card(r, i, buried) {
     buried ? '<span class="meta-tag bur">buried</span>' : "",
     r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : "",
     state.knownSnap && state.knownSnap.size && !state.knownSnap.has(r.url) ? '<span class="meta-tag new-t">new</span>' : "",
-    r.dupes ? `<span class="meta-tag dup" title="Identical copies merged into this result">⧉ ${r.dupes} duplicate${r.dupes > 1 ? "s" : ""} collapsed</span>` : "",
-    r.date && state.sort === "oldest" ? `<span class="meta-tag date">${esc(new Date(r.date).toISOString().slice(0, 10))}</span>` : "",
+    (r.dupes + r.dupList.length) ? `<span class="meta-tag dup" title="${esc(r.dupList.length ? "Same image also on: " + r.dupList.map(d => d.domain || hostOf(d.url)).join(", ") : "Identical copies merged into this result")}">${r.dupes + r.dupList.length} duplicate${r.dupes + r.dupList.length > 1 ? "s" : ""} collapsed</span>` : "",
+    r.rarity != null && (state.sort === "rarity" || r.rarity >= 70) ? `<span class="meta-tag rarity" title="Rarity score: few engines, deep position, exact match">◆ rarity ${Math.round(r.rarity)}</span>` : "",
+    r.views != null && r.kind !== "video" ? `<span class="meta-tag views">${fmtViews(r.views)} views</span>` : "",
+    r.langs.length ? `<span class="meta-tag lang" title="Found by the translated query">${esc(r.langs.join(" · "))}</span>` : "",
+    r.date && (state.sort === "oldest" || state.sort === "newest") ? `<span class="meta-tag date">${esc(new Date(r.date).toISOString().slice(0, 10))}</span>` : "",
     seen.has(r.url) ? '<span class="meta-tag seen-t">seen</span>' : ""
   ].join("");
   const direct = r.thumb || (r.kind === "image" ? r.img : "");
@@ -685,6 +724,7 @@ function card(r, i, buried) {
       ${r.resolution ? `<span class="res-tag">${esc(r.resolution)}</span>` : ""}
       ${r.kind === "video" ? `<span class="play">${PLAY_SVG}</span>` : ""}
       ${r.length ? `<span class="dur">${esc(r.length)}</span>` : ""}
+      ${r.views != null && r.kind === "video" ? `<span class="views-ov">${fmtViews(r.views)} views</span>` : ""}
       ${curView() === "grid" ? `<span class="res-host">${esc(r.host)}</span>` : ""}
     </a>` : "";
   el.innerHTML = media + `<div class="card-main">
@@ -710,11 +750,16 @@ function queueThumb(img) {
   thumbQ.push(img); pumpThumbs();
 }
 function pumpThumbs() {
-  while (thumbActive < 3 && thumbQ.length) {
-    const img = thumbQ.shift(); if (!img.isConnected) continue;
+  for (let i = thumbQ.length - 1; i >= 0; i--) if (!thumbQ[i].isConnected) thumbQ.splice(i, 1);
+  while (thumbActive < 4 && thumbQ.length) {
+    // in-viewport thumbnails first, then the ones just below
+    let k = thumbQ.findIndex(inView); if (k < 0) k = 0;
+    const img = thumbQ.splice(k, 1)[0]; if (!img.isConnected) continue;
     thumbActive++; fetchThumb(img).finally(() => { thumbActive--; pumpThumbs(); });
   }
 }
+const inView = el => { if (!el.isConnected) return false; const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 0; };
+addEventListener("scroll", () => { if (thumbQ.length) pumpThumbs(); }, { passive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function fetchThumb(img) {
   const src = img.dataset.src;
@@ -740,10 +785,11 @@ function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
   if (state.q) {
-    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.strict ? " · strict" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
+    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.pin ? " · pinpoint" : ""}${state.near >= 2 ? " · within " + state.near + " words" : ""}${state.langx ? " · 7 languages" : ""}${state.strict ? " · strict" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
     const counts = Object.entries(state.counts).filter(([, v]) => v).map(([k, v]) => `${esc(engName(k))} ${v}`);
     if (counts.length) parts.push(`<span>answered: ${counts.join(" · ")}</span>`);
     if (state.hideSeen) { const h = [...state.results.keys()].filter(u => seen.has(u)).length; if (h) parts.push(`<span>${h} seen hidden</span>`); }
+    if (state.dedupeInfo && state.dedupeInfo.collapsed) parts.push(`<span>${state.dedupeInfo.collapsed} duplicate images collapsed</span>`);
     if (state.dropped) { const d = Object.entries(state.dropped).filter(([, v]) => v).map(([k, v]) => `${esc(k)} ${v}`); if (d.length) parts.push(`<span>filtered out: ${d.join(" · ")}</span>`); }
     if (state.unresponsive.size) parts.push(`<span class="warn unr">unresponsive: ${[...state.unresponsive].map(([k, w]) => `${esc(engName(k))} (${esc(w)})`).join(" · ")}</span>`);
     if (isGateway() && state.safe !== 0) parts.push(`<span class="warn">SafeSearch is set to Off on the server, so this filter isn't applied</span>`);
@@ -753,13 +799,17 @@ function status(n, err) {
 
 /* infinite scroll */
 new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && state.q && !state.loading && state.hasMore) loadMore(false); }, { rootMargin: "600px 0px" }).observe($("#sentinel"));
+function paintDigMore() { const b = $("#digMore"); b.hidden = !(state.paused && state.hasMore && !state.loading); }
+$("#digMore").onclick = () => loadMore(false, true);
 
 $("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
 addEventListener("click", e => { if (e.target.closest(".card,.badge,a,button,input")) return; ping(e.clientX, e.clientY, false); });
 
 renderEngines(); renderChips(); setDepth(); loadCatalog(); paintSavedBadge();
 setTimeout(() => checkSaved(), 1500);
-$("#tuneBtn").onclick = () => { const o = document.body.classList.toggle("tune-open"); $("#tuneBtn").setAttribute("aria-expanded", o); };
+function setTune(o) { document.body.classList.toggle("tune-open", o); $("#tuneBtn").setAttribute("aria-expanded", o); $("#sheetScrim").hidden = !o; }
+$("#tuneBtn").onclick = () => setTune(!document.body.classList.contains("tune-open"));
+$("#sheetClose").onclick = $("#sheetScrim").onclick = () => setTune(false);
 const hq = new URLSearchParams(location.hash.slice(1)).get("q");
 if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';
 })();
