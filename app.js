@@ -699,25 +699,42 @@ function card(r, i, buried) {
 const PH_SVG = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="10" opacity=".6"/><circle cx="24" cy="24" r="2.5" fill="rgba(70,240,224,.7)" stroke="none"/></svg>';
 const PLAY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>';
 /* thumbnails: lazy. Signed /api/thumb proxy URL first (no hotlink, no referer), then the direct URL with no-referrer, then a placeholder */
-// The proxy serves 4 fetches in flight per client, so queue proxy loads 4 at a time and retry once before falling back.
+// The proxy allows 4 fetches in flight per client and answers 503 beyond that, so fetch through a 3-wide queue,
+// back off and retry on 503/429, and fall back to the direct URL for other failures.
 const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); queueThumb(e.target); } }, { rootMargin: "500px 0px" });
-const thumbQ = []; let thumbActive = 0;
-function queueThumb(img) { thumbQ.push(img); pumpThumbs(); }
-function pumpThumbs() { while (thumbActive < 4 && thumbQ.length) { const img = thumbQ.shift(); if (!img.isConnected) continue; thumbActive++; loadThumb(img, () => { thumbActive--; pumpThumbs(); }); } }
+const thumbQ = [], blobCache = new Map(); let thumbActive = 0;
+function queueThumb(img) {
+  const src = img.dataset.src;
+  if (blobCache.has(src)) return setImg(img, blobCache.get(src), img.dataset.direct);
+  if (!img.dataset.direct && !/\/api\/thumb\?/.test(src)) return setImg(img, src, "");
+  thumbQ.push(img); pumpThumbs();
+}
+function pumpThumbs() {
+  while (thumbActive < 3 && thumbQ.length) {
+    const img = thumbQ.shift(); if (!img.isConnected) continue;
+    thumbActive++; fetchThumb(img).finally(() => { thumbActive--; pumpThumbs(); });
+  }
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function fetchThumb(img) {
+  const src = img.dataset.src;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let r;
+    try { r = await fetch(src, { credentials: "omit", referrerPolicy: "no-referrer" }); } catch { break; }
+    if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) {
+      const u = URL.createObjectURL(await r.blob()); blobCache.set(src, u); return setImg(img, u, img.dataset.direct);
+    }
+    if (r.status === 503 || r.status === 429) { await sleep(600 * (attempt + 1) + Math.random() * 400); continue; }
+    break;
+  }
+  return setImg(img, img.dataset.direct || "", "");
+}
 function thumbDone(img, ok) { const m = img.closest(".media"); if (!m) return; m.classList.toggle("loaded", ok); m.classList.toggle("failed", !ok); if (!ok) img.remove(); }
-function loadThumb(img, release) {
-  const proxied = img.dataset.src && img.dataset.direct;
-  const tries = proxied ? [img.dataset.src, img.dataset.src, img.dataset.direct] : [img.dataset.src];
-  let released = false; const rel = () => { if (!released) { released = true; release(); } };
-  const next = (i) => {
-    const u = tries[i];
-    if (!u) { rel(); return thumbDone(img, false); }
-    if (u === img.dataset.direct) rel();           // direct loads don't count against the proxy's in-flight limit
-    img.onload = () => { rel(); img.naturalWidth > 2 ? thumbDone(img, true) : next(i + 1); };
-    img.onerror = () => i === 0 && proxied ? setTimeout(() => next(1), 700) : next(i + 1);
-    img.removeAttribute("src"); img.src = u;
-  };
-  next(0);
+function setImg(img, u, fallback) {
+  if (!u) return thumbDone(img, false);
+  img.onload = () => img.naturalWidth > 2 ? thumbDone(img, true) : setImg(img, fallback, "");
+  img.onerror = () => setImg(img, fallback, "");
+  img.src = u;
 }
 function status(n, err) {
   const parts = [];
