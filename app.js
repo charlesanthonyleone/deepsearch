@@ -149,7 +149,7 @@ function renderEngines() {
       if (!state.off.has(id) && enabledEngines().length === 1) return;
       state.off.has(id) ? state.off.delete(id) : state.off.add(id);
       LS.set("enginesOff", [...state.off]); renderEngines();
-      if (state.q) runSearch();
+      if (state.q) requestSearch();
     };
     box.appendChild(b);
   }
@@ -171,32 +171,32 @@ function seg(sel, val, cb) {
   paint(val);
   g.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; paint(b.dataset.v); cb(b.dataset.v); });
 }
-seg("#safe", state.safe, v => { state.safe = +v; LS.set("safe", state.safe); if (state.q) runSearch(); });
+seg("#safe", state.safe, v => { state.safe = +v; LS.set("safe", state.safe); if (state.q) requestSearch(); });
 const SERVER_SORTS = ["rarity", "leastviewed", "oldest", "newest"];
-seg("#sort", state.sort, v => { const prev = state.sort; state.sort = v; LS.set("sort", v); if (isGateway() && state.q && (SERVER_SORTS.includes(v) || SERVER_SORTS.includes(prev))) runSearch(true); else render(true); });
+seg("#sort", state.sort, v => { const prev = state.sort; state.sort = v; LS.set("sort", v); if (isGateway() && state.q && (SERVER_SORTS.includes(v) || SERVER_SORTS.includes(prev))) requestSearch(true); else render(true); });
 const dig = $("#dig");
 function paintDig() {
   dig.value = state.dig; $("#digVal").textContent = state.dig; $("#digS").textContent = state.dig > 1 ? "s" : "";
   dig.style.setProperty("--p", ((state.dig - 1) / 4 * 100) + "%");
 }
 dig.addEventListener("input", () => { state.dig = +dig.value; LS.set("dig", state.dig); paintDig(); });
-dig.addEventListener("change", () => { if (state.q) runSearch(); });
+dig.addEventListener("change", () => { if (state.q) requestSearch(); });
 paintDig();
 const curView = () => state.views[state.cat] || (state.cat === "general" ? "list" : "grid");
 let paintView = () => {};
-seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); if (state.q) runSearch(); });
+seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); if (state.q) requestSearch(); });
 (() => { const g = $("#view"); paintView = v => g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === v)); })();
 seg("#view", curView(), v => { state.views[state.cat] = v; LS.set("views", state.views); render(true); });
 const datedWrap = $("#datedWrap"), datedCb = $("#dated");
 datedCb.checked = state.dated; datedWrap.classList.toggle("on", !!state.time);
-datedWrap.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); state.dated = !state.dated; datedCb.checked = state.dated; LS.set("dated", state.dated); if (state.q && state.time) runSearch(true); });
-seg("#time", state.time, v => { state.time = v; LS.set("time", v); datedWrap.classList.toggle("on", !!v); if (state.q) runSearch(true); });
+datedWrap.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); state.dated = !state.dated; datedCb.checked = state.dated; LS.set("dated", state.dated); if (state.q && state.time) requestSearch(true); });
+seg("#time", state.time, v => { state.time = v; LS.set("time", v); datedWrap.classList.toggle("on", !!v); if (state.q) requestSearch(true); });
 const st = $("#strict"); st.checked = state.strict;
-st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); if (isGateway() && state.q) runSearch(true); else render(true); });
+st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); if (isGateway() && state.q) requestSearch(true); else render(true); });
 const mm = $("#minm");
 function paintMin() { mm.value = state.minm; $("#minVal").textContent = state.minm; mm.style.setProperty("--p", state.minm + "%"); }
 mm.addEventListener("input", () => { state.minm = +mm.value; LS.set("minm", state.minm); paintMin(); if (!isGateway()) render(true); });
-mm.addEventListener("change", () => { if (isGateway() && state.q) runSearch(true); });
+mm.addEventListener("change", () => { if (isGateway() && state.q) requestSearch(true); });
 paintMin();
 const dd = $("#dedupe"); dd.checked = state.dedupe;
 dd.addEventListener("change", () => { state.dedupe = dd.checked; LS.set("dedupe", dd.checked); render(true); });
@@ -217,7 +217,7 @@ function renderChips() {
     b.onclick = e => {
       if (editing) { state.chips = state.chips.filter(x => x !== d); state.activeChips = state.activeChips.filter(x => x !== d); LS.set("chips", state.chips); renderChips(); return; }
       state.activeChips = state.activeChips.includes(d) ? state.activeChips.filter(x => x !== d) : [...state.activeChips, d];
-      renderChips(); if (state.q || $("#q").value.trim()) runSearch();
+      renderChips(); if (state.q || $("#q").value.trim()) requestSearch();
     };
     box.appendChild(b);
   }
@@ -281,10 +281,10 @@ async function copyLink(url, btn) {
 $("#results").addEventListener("auxclick", e => { const a = e.target.closest(".card a[href]"); if (a && e.button === 1) { markSeen(a.closest(".card").dataset.url); a.closest(".card").classList.add("seen"); } });
 
 /* server precision toggles */
-function bindToggle(id, key) { const el = $("#" + id); el.checked = !!state[key]; el.addEventListener("change", () => { state[key] = el.checked; LS.set(key, el.checked); if (state.q) runSearch(true); }); }
+function bindToggle(id, key) { const el = $("#" + id); el.checked = !!state[key]; el.addEventListener("change", () => { state[key] = el.checked; LS.set(key, el.checked); if (state.q) requestSearch(true); }); }
 bindToggle("pin", "pin"); bindToggle("langx", "langx"); bindToggle("dupes", "dupes");
 const nearSel = $("#near"); nearSel.value = String(state.near || 0);
-nearSel.addEventListener("change", () => { state.near = +nearSel.value; LS.set("near", state.near); if (state.q) runSearch(true); });
+nearSel.addEventListener("change", () => { state.near = +nearSel.value; LS.set("near", state.near); if (state.q) requestSearch(true); });
 
 /* always exclude (settings drawer) */
 function excludeList() { const out = []; String(state.exclude || "").replace(/"([^"]+)"|([^,]+)/g, (m, p, w) => { const t = (p || w || "").trim().replace(/^-+/, ""); if (t) out.push(t); return m; }); return out.slice(0, 20); }
@@ -382,7 +382,7 @@ $("#clearSeen").onclick = () => { seen.clear(); LS.del("seen"); render(true); };
 /* exact phrase toggle */
 const phraseBtn = $("#phraseBtn");
 phraseBtn.setAttribute("aria-pressed", state.phrase);
-phraseBtn.onclick = () => { state.phrase = !state.phrase; LS.set("phrase", state.phrase); phraseBtn.setAttribute("aria-pressed", state.phrase); if (isGateway() && state.q) runSearch(true); else render(true); };
+phraseBtn.onclick = () => { state.phrase = !state.phrase; LS.set("phrase", state.phrase); phraseBtn.setAttribute("aria-pressed", state.phrase); if (isGateway() && state.q) requestSearch(true); else render(true); };
 const normTxt = s => " " + String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() + " ";
 // the whole query as plain consecutive words (operators like site:, -x, OR stripped)
 function phraseOf(q) { const pq = parseQuery(q); return normTxt([...pq.phrases, ...pq.terms].join(" ")).trim(); }
@@ -597,6 +597,13 @@ function buriedScore(r) {
 /* ---------------- search flow ---------------- */
 let ctrl = null;
 const pq0 = () => parseQuery(state.q);
+// Debounce filter/tab changes so a string of taps doesn't abort-and-stack 10-25s server searches.
+let searchTimer = null;
+function requestSearch(keepFacets, immediate) {
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+  if (immediate) return runSearch(keepFacets);
+  searchTimer = setTimeout(() => { searchTimer = null; runSearch(keepFacets); }, 400);
+}
 async function runSearch(keepFacets) {
   const q = fullQuery();
   if (!q) return;
@@ -701,7 +708,7 @@ function renderFacets(list) {
   for (const [h, n] of top) {
     const b = document.createElement("button"); b.type = "button"; b.className = "facet";
     b.setAttribute("aria-pressed", state.facets.has(h)); b.innerHTML = `<span></span><b>${n}</b>`; b.firstChild.textContent = h;
-    b.onclick = () => { state.facets.has(h) ? state.facets.delete(h) : state.facets.add(h); if (isGateway()) runSearch(true); else render(true); };
+    b.onclick = () => { state.facets.has(h) ? state.facets.delete(h) : state.facets.add(h); if (isGateway()) requestSearch(true); else render(true); };
     box.appendChild(b);
   }
 }
