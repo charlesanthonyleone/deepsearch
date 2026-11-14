@@ -168,7 +168,7 @@
     <button type="button" id="clearSettings" class="ghost danger">Forget token</button>
   </div>
   <p class="drawer-note" id="settingsNote"></p>
-  <p class="drawer-fine">Settings stay in this browser's localStorage. The token is sent only to the API base above as <code>Authorization: Bearer</code>. No analytics, no trackers, no cookies. Every link opens with <code>noreferrer</code>.</p>
+  <p class="drawer-fine">Settings stay in this browser's localStorage. The token is sent only to the API base above as <code>Authorization: Bearer</code>. No analytics, no trackers, no cookies. Every link opens with <code>noreferrer</code>. A page can't open Incognito for you; use <b>Copy link</b> on a result and paste it into an incognito tab.</p>
 </aside>
 
 <aside class="drawer" id="savedDrawer" aria-hidden="true" aria-label="Saved searches">
@@ -178,6 +178,8 @@
   <div class="saved-list" id="savedList"></div>
   <div class="drawer-actions"><button type="button" id="refreshSaved" class="ghost">Check all now</button><button type="button" id="clearSeen" class="ghost danger">Clear seen history</button></div>
 </aside>
+
+<div class="toast" id="toast" hidden role="status" aria-live="polite">Copied</div>
 
 <script src="config.js"></script>
 <script src="app.js"></script>

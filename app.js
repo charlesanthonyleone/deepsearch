@@ -254,10 +254,30 @@ function markSeen(url) { if (seen.has(url)) return; seen.add(url); const arr = [
 const hs = $("#hideSeen"); hs.checked = state.hideSeen;
 hs.addEventListener("change", () => { state.hideSeen = hs.checked; LS.set("hideSeen", hs.checked); render(true); });
 $("#results").addEventListener("click", e => {
+  const copy = e.target.closest(".copy-link");
+  if (copy) { e.preventDefault(); e.stopPropagation(); copyLink(copy.closest(".card").dataset.url, copy); return; }
   const d = e.target.closest(".dismiss");
   if (d) { e.preventDefault(); const c = d.closest(".card"); markSeen(c.dataset.url); if (state.hideSeen) { c.style.transition = "opacity .25s, transform .25s"; c.style.opacity = 0; c.style.transform = "scale(.97)"; setTimeout(() => render(true), 250); } else { c.classList.add("seen"); } return; }
   const a = e.target.closest(".card a[href]"); if (a) { const c = a.closest(".card"); markSeen(c.dataset.url); setTimeout(() => c.classList.add("seen"), 300); }
 });
+async function copyLink(url, btn) {
+  if (!url) return;
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; }
+  catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = url; ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, url.length);
+      ok = document.execCommand("copy"); ta.remove();
+    } catch {}
+  }
+  if (!ok) return;
+  const t = $("#toast");
+  if (t) { t.hidden = false; t.textContent = "Copied"; t.classList.add("show"); clearTimeout(copyLink._t); copyLink._t = setTimeout(() => { t.classList.remove("show"); t.hidden = true; }, 1400); }
+  if (btn) { const prev = btn.textContent; btn.textContent = "Copied"; btn.classList.add("copied"); clearTimeout(btn._t); btn._t = setTimeout(() => { btn.textContent = prev; btn.classList.remove("copied"); }, 1400); }
+}
 $("#results").addEventListener("auxclick", e => { const a = e.target.closest(".card a[href]"); if (a && e.button === 1) { markSeen(a.closest(".card").dataset.url); a.closest(".card").classList.add("seen"); } });
 
 /* server precision toggles */
@@ -321,6 +341,7 @@ async function checkSaved(list) {
   if (!state.token || !state.apiBase || checking) return;
   checking = true;
   for (const s of list || state.saved.slice(0, 15)) {
+    while (state.loading) await sleep(400);   // never pile saved-checks on top of a live search
     s.checking = true; renderSaved();
     try {
       const j = await apiFetch(savedUrl(s));
@@ -331,7 +352,7 @@ async function checkSaved(list) {
       s.error = ""; s.lastRun = Date.now();
     } catch (e) { s.error = /Rate/.test(e.message) ? "rate limited" : "failed"; }
     s.checking = false; persistSaved(); renderSaved();
-    await new Promise(r => setTimeout(r, 1200));
+    await sleep(3000);
   }
   checking = false;
 }
@@ -474,18 +495,44 @@ function buildUrl(q, page) {
   } else { p.set("format", "json"); p.set("pageno", String(page)); }
   return state.apiBase + state.apiPath + "?" + p.toString();
 }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function mergeSignals(a, b) {
+  if (!a) return b; if (!b) return a;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any([a, b]);
+  const c = new AbortController();
+  const on = () => c.abort();
+  a.addEventListener("abort", on); b.addEventListener("abort", on);
+  if (a.aborted || b.aborted) c.abort();
+  return c.signal;
+}
 async function apiFetch(url, signal) {
   if (!state.apiBase) throw new Error("Set the API base in settings ⚙");
   const headers = { Accept: "application/json" };
   if (state.token) headers.Authorization = "Bearer " + state.token;
-  let r;
-  try { r = await fetch(url, { headers, signal, referrerPolicy: "no-referrer", credentials: "omit", cache: "no-store" }); }
-  catch (e) { if (e.name === "AbortError") throw e; throw new Error("Can't reach the uplink. Check the API base, or this origin isn't allowed by the server's CORS."); }
-  if (r.status === 401) throw new Error("Token rejected. Open settings ⚙ and paste your access token.");
-  if (r.status === 429) throw new Error(`Rate limited. Try again in ${r.headers.get("Retry-After") || "a few"}s.`);
-  if (r.status === 403) throw new Error("Forbidden by the server (origin not allowed).");
-  if (!r.ok) throw new Error(`Uplink error ${r.status}.`);
-  return r.json();
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const timeout = (typeof AbortSignal.timeout === "function") ? AbortSignal.timeout(90000) : null;
+    const sig = timeout ? mergeSignals(signal, timeout) : signal;
+    let r;
+    try { r = await fetch(url, { headers, signal: sig, referrerPolicy: "no-referrer", credentials: "omit", cache: "no-store" }); }
+    catch (e) {
+      if (e.name === "AbortError" && signal && signal.aborted) throw e;
+      last = new Error("Can't reach the uplink. Check the API base, or this origin isn't allowed by the server's CORS.");
+      if (attempt === 0) { await sleep(800); continue; }
+      throw last;
+    }
+    if (r.status === 401) throw new Error("Token rejected. Open settings ⚙ and paste your access token.");
+    if (r.status === 429) throw new Error(`Rate limited. Try again in ${r.headers.get("Retry-After") || "a few"}s.`);
+    if (r.status === 403) throw new Error("Forbidden by the server (origin not allowed).");
+    if (r.status === 502 || r.status === 504) {
+      last = new Error(r.status === 504 ? "Search timed out. Try again in a moment." : "Search backend was busy. Try again in a moment.");
+      if (attempt === 0) { await sleep(1000); continue; }
+      throw last;
+    }
+    if (!r.ok) throw new Error(`Uplink error ${r.status}.`);
+    return r.json();
+  }
+  throw last;
 }
 const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
 const safeUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : ""; } catch { return ""; } };
@@ -732,6 +779,7 @@ function card(r, i, buried) {
     <h3><a href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">${highlight(r.title, r.m.hits)}</a></h3>
     <p>${highlight(r.content, r.m.hits)}</p>
     <div class="badges">${badges}${tags}</div></div>
+    <button type="button" class="copy-link" aria-label="Copy link" title="Copy link to paste into an incognito tab">Copy</button>
     <button type="button" class="dismiss" aria-label="Dismiss" title="Dismiss (mark as seen)">✕</button>`;
   const img = el.querySelector(".media img"); if (img) thumbIO.observe(img);
   return el;
@@ -760,7 +808,6 @@ function pumpThumbs() {
 }
 const inView = el => { if (!el.isConnected) return false; const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 0; };
 addEventListener("scroll", () => { if (thumbQ.length) pumpThumbs(); }, { passive: true });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function fetchThumb(img) {
   const src = img.dataset.src;
   for (let attempt = 0; attempt < 4; attempt++) {
