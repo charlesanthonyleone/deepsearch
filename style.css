@@ -198,7 +198,8 @@ mark{background:rgba(70,240,224,.16);color:#e9fffd;border-radius:3px;padding:0 2
 .results.grid .card .badge{font-size:10px;padding:2px 7px 2px 6px}
 .results.grid.cat-images .media{aspect-ratio:1/1}
 .results.grid.cat-images .card h3{font-size:12.5px;font-weight:500;color:var(--ink2)}
-.results.grid .empty,.results.grid .floor,.results.grid .skeleton,.results.grid .res-tag{position:absolute;z-index:2;right:8px;top:8px;padding:2px 6px;border-radius:6px;background:rgba(0,0,0,.6);font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.85)}
+.results.grid .res-tag{position:absolute;z-index:2;right:8px;top:8px;padding:2px 6px;border-radius:6px;background:rgba(0,0,0,.6);font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.85)}
+.results.grid .empty,.results.grid .floor,.results.grid .skeleton,.results.grid .notice{grid-column:1/-1;position:relative;inset:auto;padding:unset;background:unset;color:unset;font-family:unset;font-size:unset;box-shadow:unset}
 .dated{display:none;align-items:center;gap:8px;margin-left:6px;cursor:pointer;position:relative}
 .dated.on{display:flex}
 .dated input{position:absolute;opacity:0;pointer-events:none}
