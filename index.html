@@ -56,6 +56,17 @@
 
     <button type="button" class="tune" id="tuneBtn" aria-expanded="false">Engines &amp; filters <span aria-hidden="true">▾</span></button>
     <div class="controls">
+      <div class="tabs-row">
+        <span class="seg-group tabs" id="cat" role="tablist" aria-label="Category">
+          <button type="button" data-v="general">Web</button><button type="button" data-v="videos">Videos</button>
+        </span>
+        <label class="ctl seg" aria-label="Recency">
+          <span class="lbl">Recency</span>
+          <span class="seg-group" id="time">
+            <button type="button" data-v="">Any</button><button type="button" data-v="day">Day</button><button type="button" data-v="week">Week</button><button type="button" data-v="month">Month</button><button type="button" data-v="year">Year</button>
+          </span>
+        </label>
+      </div>
       <div class="ctl engines" role="group" aria-label="Engines" id="engines"></div>
       <div class="ctl-row">
         <label class="ctl seg" aria-label="SafeSearch">
@@ -75,6 +86,11 @@
             <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button>
           </span>
         </label>
+        <label class="ctl toggle" title="Show only results that contain every word and phrase"><input type="checkbox" id="strict"><span class="sw"></span><span class="lbl">Strict</span></label>
+        <label class="ctl dig minm">
+          <span class="lbl">Min match <b id="minVal">0</b><small>%</small></span>
+          <input type="range" id="minm" min="0" max="100" step="5" value="0">
+        </label>
         <label class="ctl toggle"><input type="checkbox" id="dedupe"><span class="sw"></span><span class="lbl">One per domain</span></label>
       </div>
       <div class="chips-row">
@@ -91,6 +107,7 @@
   </form>
 
   <section class="status" id="status" aria-live="polite"></section>
+  <section class="facets" id="facets" hidden></section>
   <section class="results" id="results"></section>
   <div class="sentinel" id="sentinel"><span class="loader" id="loader" hidden><i></i><i></i><i></i></span></div>
 </main>

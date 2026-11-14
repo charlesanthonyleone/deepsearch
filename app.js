@@ -29,6 +29,7 @@ const state = {
   dig: LS.get("dig", 1),
   sort: LS.get("sort", "relevance"),
   dedupe: LS.get("dedupe", false),
+  cat: LS.get("cat", "general"), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
   apiBase: LS.get("apiBase", CFG.apiBase || ""),
@@ -125,7 +126,7 @@ addEventListener("scroll", () => requestAnimationFrame(setDepth), { passive: tru
 
 /* ---------------- controls ---------------- */
 function renderEngines() {
-  const box = $("#engines"); box.innerHTML = "";
+  const box = $("#engines"); box.innerHTML = ""; box.hidden = state.cat !== "general";
   for (const e of ENGINES) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "eng"; b.style.setProperty("--c", e.c);
@@ -159,6 +160,14 @@ function paintDig() {
 dig.addEventListener("input", () => { state.dig = +dig.value; LS.set("dig", state.dig); paintDig(); });
 dig.addEventListener("change", () => { if (state.q) runSearch(); });
 paintDig();
+seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); if (state.q) runSearch(); });
+seg("#time", state.time, v => { state.time = v; LS.set("time", v); if (state.q) runSearch(); });
+const st = $("#strict"); st.checked = state.strict;
+st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); render(true); });
+const mm = $("#minm");
+function paintMin() { mm.value = state.minm; $("#minVal").textContent = state.minm; mm.style.setProperty("--p", state.minm + "%"); }
+mm.addEventListener("input", () => { state.minm = +mm.value; LS.set("minm", state.minm); paintMin(); render(true); });
+paintMin();
 const dd = $("#dedupe"); dd.checked = state.dedupe;
 dd.addEventListener("change", () => { state.dedupe = dd.checked; LS.set("dedupe", dd.checked); render(true); });
 
@@ -261,7 +270,9 @@ function fullQuery() {
 function buildUrl(q, page) {
   const p = new URLSearchParams();
   p.set("q", q);
-  p.set("engines", state.engines.join(","));
+  if (state.cat === "general" || !isGateway()) p.set("engines", state.engines.join(","));
+  if (isGateway()) { p.set("category", state.cat); if (state.time) p.set("time", state.time); }
+  else { if (state.cat !== "general") p.set("categories", state.cat); if (state.time) p.set("time_range", state.time); }
   p.set("safesearch", String(state.safe));
   if (isGateway()) {
     if (state.dig >= 5) { p.set("page", String(page)); p.set("deep", "1"); }
@@ -336,7 +347,7 @@ async function runSearch() {
   const q = fullQuery();
   if (!q) return;
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
-  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false;
+  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; state.facets = new Set();
   if (ctrl) ctrl.abort();
   document.body.classList.add("diving");
   const u = new URL(location.href); u.hash = "q=" + encodeURIComponent(qi.value.trim()); history.replaceState(null, "", u);
@@ -396,8 +407,23 @@ function highlight(text, hits) {
   return h.replace(re, "<mark>$1</mark>");
 }
 let rendered = 0;
+function renderFacets(list) {
+  const box = $("#facets"), counts = new Map();
+  for (const r of list) counts.set(r.host, (counts.get(r.host) || 0) + 1);
+  const top = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).slice(0, 14);
+  for (const f of state.facets) if (!counts.has(f)) top.push([f, 0]);
+  box.hidden = top.length < 2; box.innerHTML = "";
+  for (const [h, n] of top) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "facet";
+    b.setAttribute("aria-pressed", state.facets.has(h)); b.innerHTML = `<span></span><b>${n}</b>`; b.firstChild.textContent = h;
+    b.onclick = () => { state.facets.has(h) ? state.facets.delete(h) : state.facets.add(h); render(true); };
+    box.appendChild(b);
+  }
+}
 function sorted() {
-  let list = [...state.results.values()];
+  let list = [...state.results.values()].filter(r => (!state.strict || r.m.exact) && r.m.strength >= state.minm);
+  renderFacets(list);
+  if (state.facets.size) list = list.filter(r => state.facets.has(r.host));
   list.sort(state.sort === "buried" ? (a, b) => b.b - a.b || a.idx - b.idx : (a, b) => a.idx - b.idx);
   if (state.dedupe) {
     const seen = new Map(), out = [];
@@ -414,7 +440,7 @@ function render(reset, err) {
   const frag = document.createDocumentFragment();
   list.slice(rendered).forEach((r, i) => frag.appendChild(card(r, i, r.b >= bThreshold && r.m.exact && r.engines.length <= 2)));
   box.appendChild(frag); rendered = list.length;
-  if (!list.length) box.innerHTML = err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No results matched. Loosen a quote, drop a -exclude, or switch on more engines.</div>`;
+  if (!list.length) box.innerHTML = err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No results matched. Loosen a quote, drop a -exclude, lower Min match, turn off Strict, or switch on more engines.</div>`;
   status(list.length, err);
   if (!state.hasMore && list.length) box.insertAdjacentHTML("beforeend", `<div class="floor">— OCEAN FLOOR · ${list.length} RESULTS —</div>`);
 }
@@ -443,7 +469,7 @@ function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
   if (state.q) {
-    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · sorted by ${state.sort}${state.dedupe ? " · one per domain" : ""}</span>`);
+    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · sorted by ${state.sort}${state.strict ? " · strict" : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
     const counts = Object.entries(state.counts).filter(([, v]) => v).map(([k, v]) => `${esc(engName(k))} ${v}`);
     if (counts.length) parts.push(`<span>answered: ${counts.join(" · ")}</span>`);
     if (state.unresponsive.size) parts.push(`<span class="warn unr">unresponsive: ${[...state.unresponsive].map(([k, w]) => `${esc(engName(k))} (${esc(w)})`).join(" · ")}</span>`);
