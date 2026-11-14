@@ -19,18 +19,23 @@ const ENGINES = [
   { id: "qwant", name: "Qwant", c: "#c77dff" }
 ];
 const ENG = Object.fromEntries(ENGINES.map(e => [e.id, e]));
-const engColor = id => (ENG[id] && ENG[id].c) || "#8fb4c2";
-const engName = id => (ENG[id] && ENG[id].name) || id;
+const hue = s => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+const baseOf = id => String(id).split(/[ .]/)[0];
+const engColor = id => (ENG[id] && ENG[id].c) || (ENG[baseOf(id)] && ENG[baseOf(id)].c) || `hsl(${hue(baseOf(id))},70%,62%)`;
+const engName = id => (ENG[id] && ENG[id].name) || String(id).replace(/(^|[ .])([a-z])/g, (m, p, c) => (p === "." ? " " : p) + c.toUpperCase());
+const KIND = { general: "web", images: "images", videos: "videos" };
 const DEFAULT_CHIPS = ["reddit.com", "archive.org", "github.com", "wikipedia.org", "news.ycombinator.com", "stackexchange.com"];
 
 const state = {
-  engines: LS.get("engines", ENGINES.map(e => e.id)),
+  off: new Set(LS.get("enginesOff", [])),
+  catalog: { web: ENGINES.map(e => e.id), images: [], videos: [] }, catalogLoaded: false,
+  facetList: [], dropped: null,
   safe: LS.get("safe", 0),
   dig: LS.get("dig", 1),
   sort: LS.get("sort", "relevance"),
   dedupe: LS.get("dedupe", false),
   views: LS.get("views", { general: "list", images: "grid", videos: "grid" }), thumbProxy: CFG.thumbProxy === undefined ? "auto" : CFG.thumbProxy,
-  cat: LS.get("cat", "general"), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
+  cat: LS.get("cat", "general"), phrase: LS.get("phrase", false), dated: LS.get("dated", false), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
   apiBase: LS.get("apiBase", CFG.apiBase || ""),
@@ -126,24 +131,38 @@ function setDepth() {
 addEventListener("scroll", () => requestAnimationFrame(setDepth), { passive: true });
 
 /* ---------------- controls ---------------- */
+const kindEngines = () => state.catalog[KIND[state.cat]] || [];
+const enabledEngines = () => kindEngines().filter(e => !state.off.has(e));
 function renderEngines() {
-  const box = $("#engines"); box.innerHTML = ""; box.hidden = state.cat !== "general";
-  for (const e of ENGINES) {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "eng"; b.style.setProperty("--c", e.c);
-    b.setAttribute("aria-pressed", state.engines.includes(e.id));
-    const down = state.unresponsive.get(e.id);
-    b.title = down ? `${e.name}: unresponsive (${down})` : e.name;
-    b.innerHTML = `<i></i>${e.name}${down ? ' <span class="down" aria-label="unresponsive">⚠</span>' : ""}`;
+  const box = $("#engines"); box.innerHTML = "";
+  const list = kindEngines(); box.hidden = !list.length;
+  for (const id of list) {
+    const b = document.createElement("button"), name = engName(id);
+    b.type = "button"; b.className = "eng"; b.style.setProperty("--c", engColor(id));
+    b.setAttribute("aria-pressed", !state.off.has(id));
+    const down = state.unresponsive.get(id);
+    b.title = down ? `${name}: unresponsive (${down})` : name;
+    b.innerHTML = `<i></i><span></span>${down ? ' <span class="down" aria-label="unresponsive">⚠</span>' : ""}`;
+    b.children[1].textContent = name;
     b.onclick = () => {
-      const on = state.engines.includes(e.id);
-      if (on && state.engines.length === 1) return;
-      state.engines = on ? state.engines.filter(x => x !== e.id) : [...state.engines, e.id];
-      LS.set("engines", state.engines); renderEngines();
+      if (!state.off.has(id) && enabledEngines().length === 1) return;
+      state.off.has(id) ? state.off.delete(id) : state.off.add(id);
+      LS.set("enginesOff", [...state.off]); renderEngines();
       if (state.q) runSearch();
     };
     box.appendChild(b);
   }
+}
+async function loadCatalog() {
+  if (!isGateway() || !state.token || !state.apiBase) return;
+  try {
+    const j = await apiFetch(state.apiBase + "/api/engines");
+    const cat = { web: [], images: [], videos: [] };
+    const pri = id => { const i = ENGINES.findIndex(e => e.id === id); return i < 0 ? 99 : i; };
+    for (const e of j.engines || []) for (const k of (e.kinds || (e.categories || []).map(c => c === "general" ? "web" : c))) if (cat[k]) cat[k].push(e.name);
+    for (const k in cat) cat[k].sort((x, y) => pri(x) - pri(y) || x.localeCompare(y));
+    if (cat.web.length || cat.images.length || cat.videos.length) { state.catalog = cat; state.catalogLoaded = true; renderEngines(); setLink("ok", "uplink live"); }
+  } catch (e) { if (/Token/.test(e.message)) setLink("bad", "token rejected"); }
 }
 function seg(sel, val, cb) {
   const g = $(sel);
@@ -166,12 +185,16 @@ let paintView = () => {};
 seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); if (state.q) runSearch(); });
 (() => { const g = $("#view"); paintView = v => g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === v)); })();
 seg("#view", curView(), v => { state.views[state.cat] = v; LS.set("views", state.views); render(true); });
-seg("#time", state.time, v => { state.time = v; LS.set("time", v); if (state.q) runSearch(); });
+const datedWrap = $("#datedWrap"), datedCb = $("#dated");
+datedCb.checked = state.dated; datedWrap.classList.toggle("on", !!state.time);
+datedWrap.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); state.dated = !state.dated; datedCb.checked = state.dated; LS.set("dated", state.dated); if (state.q && state.time) runSearch(true); });
+seg("#time", state.time, v => { state.time = v; LS.set("time", v); datedWrap.classList.toggle("on", !!v); if (state.q) runSearch(true); });
 const st = $("#strict"); st.checked = state.strict;
-st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); render(true); });
+st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); if (isGateway() && state.q) runSearch(true); else render(true); });
 const mm = $("#minm");
 function paintMin() { mm.value = state.minm; $("#minVal").textContent = state.minm; mm.style.setProperty("--p", state.minm + "%"); }
-mm.addEventListener("input", () => { state.minm = +mm.value; LS.set("minm", state.minm); paintMin(); render(true); });
+mm.addEventListener("input", () => { state.minm = +mm.value; LS.set("minm", state.minm); paintMin(); if (!isGateway()) render(true); });
+mm.addEventListener("change", () => { if (isGateway() && state.q) runSearch(true); });
 paintMin();
 const dd = $("#dedupe"); dd.checked = state.dedupe;
 dd.addEventListener("change", () => { state.dedupe = dd.checked; LS.set("dedupe", dd.checked); render(true); });
@@ -217,19 +240,33 @@ ops.addEventListener("click", e => {
   const sel = v.slice(s, en);
   let out, caret;
   if (ins === '""') { out = `"${sel}"`; caret = s + (sel ? out.length : 1); }
+  else if (ins === "( )") { out = `(${sel})`; caret = s + (sel ? out.length : 1); }
+  else if (ins === "*") { out = sel + "*"; caret = s + out.length; }
   else { const pre = (s > 0 && !/\s$/.test(v.slice(0, s)) && ins !== " OR ") ? " " : ""; out = pre + ins + sel; caret = s + out.length; }
   qi.value = v.slice(0, s) + out + v.slice(en); qi.focus(); qi.setSelectionRange(caret, caret);
 });
+
+/* exact phrase toggle */
+const phraseBtn = $("#phraseBtn");
+phraseBtn.setAttribute("aria-pressed", state.phrase);
+phraseBtn.onclick = () => { state.phrase = !state.phrase; LS.set("phrase", state.phrase); phraseBtn.setAttribute("aria-pressed", state.phrase); if (isGateway() && state.q) runSearch(true); else render(true); };
+const normTxt = s => " " + String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() + " ";
+// the whole query as plain consecutive words (operators like site:, -x, OR stripped)
+function phraseOf(q) { const pq = parseQuery(q); return normTxt([...pq.phrases, ...pq.terms].join(" ")).trim(); }
+function slugText(u) { try { const x = new URL(u); const segs = x.pathname.split("/").filter(Boolean); return decodeURIComponent(segs.join(" ")); } catch { return ""; } }
+function hasPhrase(r, ph) { if (!ph) return true; const n = " " + ph + " "; return normTxt(r.title).includes(n) || normTxt(r.content).includes(n) || normTxt(slugText(r.url)).includes(n); }
 
 /* query builder */
 const qb = $("#qb"), qbBtn = $("#qbBtn");
 qbBtn.onclick = () => { qb.hidden = !qb.hidden; qbBtn.setAttribute("aria-expanded", !qb.hidden); if (!qb.hidden) { ops.hidden = true; help.setAttribute("aria-expanded", "false"); $("#qbAll").focus(); } qbPreview(); };
 help.addEventListener("click", () => { if (!ops.hidden) { qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); } });
-const words = id => $(id).value.replace(/"/g, " ").split(/[\s,]+/).map(w => w.trim().replace(/^-+/, "")).filter(Boolean);
+const words = id => $(id).value.replace(/["()|]/g, " ").split(/[\s,]+/).map(w => w.trim().replace(/^[-+]+/, "").replace(/\*+$/, "*").replace(/^(intitle|inurl|site):/i, "")).filter(w => w && w !== "*" && !/^(AND|OR|NOT)$/.test(w));
 function buildQuery() {
   const parts = [...words("#qbAll")];
   const ph = $("#qbPhrase").value.replace(/"/g, "").trim(); if (ph) parts.push(`"${ph}"`);
   const any = words("#qbAny"); if (any.length === 1) parts.push(any[0]); else if (any.length > 1) parts.push("(" + any.join(" OR ") + ")");
+  for (const w of words("#qbTitle")) parts.push("intitle:" + w);
+  for (const w of words("#qbUrl")) parts.push("inurl:" + w);
   for (const w of words("#qbNone")) parts.push("-" + w);
   const s = cleanDomain($("#qbSite").value); if (s) parts.push("site:" + s);
   for (const d of $("#qbNoSite").value.split(/[\s,]+/).map(cleanDomain).filter(Boolean)) parts.push("-site:" + d);
@@ -255,7 +292,7 @@ function saveSettings() {
   LS.set("apiBase", state.apiBase); LS.set("apiPath", state.apiPath); LS.set("token", state.token);
   setLink(state.token && state.apiBase ? "warn" : "", state.apiBase ? (state.token ? "uplink set" : "token needed") : "no uplink");
 }
-$("#saveSettings").onclick = () => { saveSettings(); note("Saved on this device."); };
+$("#saveSettings").onclick = () => { saveSettings(); note("Saved on this device."); loadCatalog(); };
 $("#clearSettings").onclick = () => { state.token = ""; LS.del("token"); $("#token").value = ""; note("Token forgotten."); setLink("", "token needed"); };
 $("#testSettings").onclick = async () => {
   saveSettings(); note("Pinging…");
@@ -275,12 +312,14 @@ setLink(state.token && state.apiBase ? "warn" : "", state.apiBase ? (state.token
 /* ---------------- query parsing ---------------- */
 function parseQuery(q) {
   const phrases = [], terms = [], excl = [];
-  q.replace(/(-?)"([^"]+)"|(\S+)/g, (m, neg, ph, w) => {
-    if (ph) { (neg ? excl : phrases).push(ph.toLowerCase()); return m; }
-    if (!w || w === "OR" || /^-?site:/i.test(w) || w === "(" || w === ")") return m;
-    if (w.startsWith("-") && w.length > 1) excl.push(w.slice(1).toLowerCase());
-    else terms.push(w.replace(/[()]/g, "").toLowerCase());
-    return m;
+  let neg = false;
+  q.replace(/(-?)"([^"]+)"|(\S+)/g, (m, n, ph, w) => {
+    if (ph) { ((n || neg) ? excl : phrases).push(ph.toLowerCase()); neg = false; return m; }
+    if (w === "NOT") { neg = true; return m; }
+    if (!w || /^(OR|AND|\||&&|\(|\)|-\()$/.test(w) || /^-?site:/i.test(w)) return m;
+    let t = w.replace(/[()]/g, "").replace(/^\+/, "").replace(/^(intitle|inurl):/i, "").replace(/\*$/, "").toLowerCase();
+    if (w.startsWith("-") || neg) excl.push(t.replace(/^-/, "")); else if (t) terms.push(t);
+    neg = false; return m;
   });
   return { phrases, terms: terms.filter(Boolean), excl };
 }
@@ -296,9 +335,17 @@ function fullQuery() {
 function buildUrl(q, page) {
   const p = new URLSearchParams();
   p.set("q", q);
-  if (state.cat === "general" || !isGateway()) p.set("engines", state.engines.join(","));
-  if (isGateway()) { p.set("category", state.cat); if (state.time) p.set("time", state.time); }
-  else { if (state.cat !== "general") p.set("categories", state.cat); if (state.time) p.set("time_range", state.time); }
+  if (isGateway()) {
+    const en = enabledEngines();
+    if (en.length && en.length < kindEngines().length) p.set("engines", en.join(","));
+    p.set("categories", KIND[state.cat]);
+    if (state.time) { p.set("time", state.time); if (state.dated) p.set("dated", "1"); }
+    if (state.strict) p.set("strict", "1");
+    if (state.phrase) p.set("phrase", "1");
+    if (state.minm) p.set("minMatch", String(state.minm));
+    if (state.facets.size) p.set("domains", [...state.facets].slice(0, 20).join(","));
+  } else p.set("engines", enabledEngines().join(","));
+  if (!isGateway()) { if (state.cat !== "general") p.set("categories", state.cat); if (state.time) p.set("time_range", state.time); }
   p.set("safesearch", String(state.safe));
   if (isGateway()) {
     if (state.dig >= 5) { p.set("page", String(page)); p.set("deep", "1"); }
@@ -337,10 +384,12 @@ function normalize(raw, apiPage) {
   for (const e of engines) if (!sources.find(s => s.engine === e)) sources.push({ engine: e, pos: null });
   return {
     url, title: String(raw.title || url), content: String(raw.content || ""),
-    host: raw.host || hostOf(url), engines, sources,
+    host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
+    proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
+    resolution: raw.resolution || null,
     thumb: safeUrl(raw.thumbnail || raw.thumbnail_src || raw.img_src || ""),
     img: safeUrl(raw.img_src || raw.image || ""),
-    kind: raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
+    kind: raw.kind === "videos" ? "video" : raw.kind === "images" ? "image" : raw.kind === "web" ? "web" : raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
     length: fmtLen(raw.length), match: raw.match || null
   };
 }
@@ -376,11 +425,11 @@ function buriedScore(r) {
 /* ---------------- search flow ---------------- */
 let ctrl = null;
 const pq0 = () => parseQuery(state.q);
-async function runSearch() {
+async function runSearch(keepFacets) {
   const q = fullQuery();
   if (!q) return;
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
-  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; state.facets = new Set(); state.catMismatch = null;
+  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null;
   if (ctrl) ctrl.abort();
   document.body.classList.add("diving");
   const u = new URL(location.href); u.hash = "q=" + encodeURIComponent(qi.value.trim()); history.replaceState(null, "", u);
@@ -404,7 +453,10 @@ async function loadMore(first) {
   for (const s of settled) {
     if (s.status === "rejected") { if (s.reason && s.reason.name !== "AbortError") err = s.reason; continue; }
     const { j, p } = s.value;
-    if (state.cat !== "general" && j.category && j.category !== state.cat) state.catMismatch = j.category;
+    if (!isGateway() && state.cat !== "general" && j.category && j.category !== state.cat) state.catMismatch = j.category;
+    if (isGateway() && Array.isArray(j.categories) && !j.categories.includes(KIND[state.cat])) state.catMismatch = j.categories.join(",");
+    if (j.facets && Array.isArray(j.facets.domains) && !state.facets.size) mergeFacets(j.facets.domains);
+    if (j.dropped) { state.dropped = state.dropped || {}; for (const [k, v] of Object.entries(j.dropped)) state.dropped[k] = (state.dropped[k] || 0) + (+v || 0); }
     if (isGateway()) { if (j.hasMore) anyMore = true; }
     else if ((j.results || []).length) anyMore = true;
     for (const u of j.unresponsive || j.unresponsive_engines || []) {
@@ -435,29 +487,44 @@ async function loadMore(first) {
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function highlight(text, hits) {
   let h = esc(text);
+  if (state.phrase) {
+    const ph = phraseOf(qi.value || state.q);
+    if (ph) {
+      const re = new RegExp("(" + ph.split(" ").map(w => esc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^\\p{L}\\p{N}<>]+") + ")", "giu");
+      if (re.test(h)) return h.replace(re, '<mark class="ph">$1</mark>');
+    }
+  }
   const ws = [...new Set(hits.map(w => String(w).toLowerCase()).filter(w => w.length > 1))].sort((a, b) => b.length - a.length);
   if (!ws.length) return h;
   const re = new RegExp("(" + ws.map(w => esc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
   return h.replace(re, "<mark>$1</mark>");
 }
 let rendered = 0;
+function mergeFacets(list) {
+  const m = new Map(state.facetList.map(f => [f.domain, f.count]));
+  for (const f of list) if (f && f.domain) m.set(f.domain, (m.get(f.domain) || 0) + (+f.count || 0));
+  state.facetList = [...m].map(([domain, count]) => ({ domain, count })).sort((x, y) => y.count - x.count || x.domain.localeCompare(y.domain));
+}
 function renderFacets(list) {
   const box = $("#facets"), counts = new Map();
-  for (const r of list) counts.set(r.host, (counts.get(r.host) || 0) + 1);
+  if (isGateway() && state.facetList.length) for (const f of state.facetList) counts.set(f.domain, f.count);
+  else for (const r of list) counts.set(r.domain || r.host, (counts.get(r.domain || r.host) || 0) + 1);
   const top = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).slice(0, 14);
   for (const f of state.facets) if (!counts.has(f)) top.push([f, 0]);
   box.hidden = top.length < 2; box.innerHTML = "";
   for (const [h, n] of top) {
     const b = document.createElement("button"); b.type = "button"; b.className = "facet";
     b.setAttribute("aria-pressed", state.facets.has(h)); b.innerHTML = `<span></span><b>${n}</b>`; b.firstChild.textContent = h;
-    b.onclick = () => { state.facets.has(h) ? state.facets.delete(h) : state.facets.add(h); render(true); };
+    b.onclick = () => { state.facets.has(h) ? state.facets.delete(h) : state.facets.add(h); if (isGateway()) runSearch(true); else render(true); };
     box.appendChild(b);
   }
 }
 function sorted() {
-  let list = [...state.results.values()].filter(r => (!state.strict || r.m.exact) && r.m.strength >= state.minm);
+  const gw = isGateway();
+  const ph = state.phrase ? phraseOf(qi.value || state.q) : "";
+  let list = [...state.results.values()].filter(r => (gw || ((!state.strict || r.m.exact) && r.m.strength >= state.minm)) && (!ph || hasPhrase(r, ph)));
   renderFacets(list);
-  if (state.facets.size) list = list.filter(r => state.facets.has(r.host));
+  if (state.facets.size && !gw) list = list.filter(r => state.facets.has(r.domain || r.host));
   list.sort(state.sort === "buried" ? (a, b) => b.b - a.b || a.idx - b.idx : (a, b) => a.idx - b.idx);
   if (state.dedupe) {
     const seen = new Map(), out = [];
@@ -491,12 +558,14 @@ function card(r, i, buried) {
     buried ? '<span class="meta-tag bur">buried</span>' : "",
     r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : ""
   ].join("");
-  const src = r.thumb || (r.kind === "image" ? r.img : "");
+  const direct = r.thumb || (r.kind === "image" ? r.img : "");
+  const src = r.proxy || direct;
   const showMedia = !!src || r.kind !== "web" || curView() === "grid";
   if (showMedia) el.classList.add("has-media");
   const media = showMedia ? `<a class="media${src ? "" : " failed"}" href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer" tabindex="-1" aria-hidden="true">
       <span class="ph">${PH_SVG}<em>${src ? "" : r.kind === "video" ? "video" : r.kind === "image" ? "image" : esc(r.host)}</em></span>
-      ${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}">` : ""}
+      ${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? direct : "")}">` : ""}
+      ${r.resolution ? `<span class="res-tag">${esc(r.resolution)}</span>` : ""}
       ${r.kind === "video" ? `<span class="play">${PLAY_SVG}</span>` : ""}
       ${r.length ? `<span class="dur">${esc(r.length)}</span>` : ""}
       ${curView() === "grid" ? `<span class="res-host">${esc(r.host)}</span>` : ""}
@@ -511,37 +580,28 @@ function card(r, i, buried) {
 }
 const PH_SVG = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="10" opacity=".6"/><circle cx="24" cy="24" r="2.5" fill="rgba(70,240,224,.7)" stroke="none"/></svg>';
 const PLAY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>';
-/* thumbnails: lazy, via token-protected /api/thumb proxy when the server has it, else direct with no-referrer */
-const thumbCache = new Map(); let thumbActive = 0; const thumbQ = [];
-const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); queueThumb(e.target); } }, { rootMargin: "400px 0px" });
-function queueThumb(img) { thumbQ.push(img); pumpThumbs(); }
-function pumpThumbs() { while (thumbActive < 6 && thumbQ.length) { const img = thumbQ.shift(); thumbActive++; loadThumb(img).finally(() => { thumbActive--; pumpThumbs(); }); } }
+/* thumbnails: lazy. Signed /api/thumb proxy URL first (no hotlink, no referer), then the direct URL with no-referrer, then a placeholder */
+const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); loadThumb(e.target); } }, { rootMargin: "500px 0px" });
 function thumbDone(img, ok) { const m = img.closest(".media"); if (!m) return; m.classList.toggle("loaded", ok); m.classList.toggle("failed", !ok); if (!ok) img.remove(); }
-function direct(img, src) {
-  return new Promise(res => { img.onload = () => { thumbDone(img, img.naturalWidth > 2); res(); }; img.onerror = () => { thumbDone(img, false); res(); }; img.src = src; });
-}
-async function loadThumb(img) {
-  const src = img.dataset.src;
-  if (thumbCache.has(src)) { const c = thumbCache.get(src); return c ? direct(img, c) : direct(img, src); }
-  if (isGateway() && state.thumbProxy && state.token && state.apiBase) {
-    try {
-      const r = await fetch(state.apiBase + "/api/thumb?url=" + encodeURIComponent(src), { headers: { Authorization: "Bearer " + state.token }, credentials: "omit", referrerPolicy: "no-referrer" });
-      if (r.status === 404 && state.thumbProxy === "auto") { state.thumbProxy = false; }
-      else if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) {
-        const u = URL.createObjectURL(await r.blob()); thumbCache.set(src, u); if (state.thumbProxy === "auto") state.thumbProxy = true; return direct(img, u);
-      }
-    } catch { if (state.thumbProxy === "auto") state.thumbProxy = false; }
-  }
-  thumbCache.set(src, null);
-  return direct(img, src);
+function loadThumb(img) {
+  const tries = [img.dataset.src, img.dataset.direct].filter(Boolean);
+  const next = () => {
+    const u = tries.shift();
+    if (!u) return thumbDone(img, false);
+    img.onload = () => img.naturalWidth > 2 ? thumbDone(img, true) : next();
+    img.onerror = next;
+    img.src = u;
+  };
+  next();
 }
 function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
   if (state.q) {
-    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · sorted by ${state.sort}${state.strict ? " · strict" : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
+    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.strict ? " · strict" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
     const counts = Object.entries(state.counts).filter(([, v]) => v).map(([k, v]) => `${esc(engName(k))} ${v}`);
     if (counts.length) parts.push(`<span>answered: ${counts.join(" · ")}</span>`);
+    if (state.dropped) { const d = Object.entries(state.dropped).filter(([, v]) => v).map(([k, v]) => `${esc(k)} ${v}`); if (d.length) parts.push(`<span>filtered out: ${d.join(" · ")}</span>`); }
     if (state.unresponsive.size) parts.push(`<span class="warn unr">unresponsive: ${[...state.unresponsive].map(([k, w]) => `${esc(engName(k))} (${esc(w)})`).join(" · ")}</span>`);
     if (isGateway() && state.safe !== 0) parts.push(`<span class="warn">SafeSearch is set to Off on the server, so this filter isn't applied</span>`);
   }
@@ -554,7 +614,7 @@ new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && state.q &
 $("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
 addEventListener("click", e => { if (e.target.closest(".card,.badge,a,button,input")) return; ping(e.clientX, e.clientY, false); });
 
-renderEngines(); renderChips(); setDepth();
+renderEngines(); renderChips(); setDepth(); loadCatalog();
 $("#tuneBtn").onclick = () => { const o = document.body.classList.toggle("tune-open"); $("#tuneBtn").setAttribute("aria-expanded", o); };
 const hq = new URLSearchParams(location.hash.slice(1)).get("q");
 if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';

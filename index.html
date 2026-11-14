@@ -44,6 +44,7 @@
     <div class="search-shell">
       <div class="sonar" aria-hidden="true"><i></i><i></i><i></i></div>
       <input id="q" name="q" type="search" placeholder='"exact phrase" -exclude site:example.com' aria-label="Search query" spellcheck="false" enterkeyhint="search">
+      <button type="button" class="phrase-btn" id="phraseBtn" aria-pressed="false" title="Exact Phrase: only results containing your whole query as consecutive words (title, snippet or URL)"><span class="pq">“ ”</span><span class="pt">Exact</span></button>
       <button type="button" class="help-btn qb-btn" id="qbBtn" aria-expanded="false" aria-controls="qb" title="Query builder"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
       <button type="button" class="help-btn" id="helpBtn" aria-expanded="false" aria-controls="ops" title="Search operators">?</button>
       <button type="submit" class="dive-btn"><span>DIVE</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></button>
@@ -52,7 +53,13 @@
       <button type="button" data-ins='""'><code>"exact phrase"</code><span>must contain the whole phrase, in order</span></button>
       <button type="button" data-ins="-"><code>-word</code><span>exclude anything containing <i>word</i></span></button>
       <button type="button" data-ins="site:"><code>site:domain.com</code><span>only results from one domain</span></button>
-      <button type="button" data-ins=" OR "><code>a OR b</code><span>either term, uppercase OR</span></button>
+      <button type="button" data-ins=" OR "><code>a OR b</code><span>either term (or <code>a | b</code>)</span></button>
+      <button type="button" data-ins="NOT "><code>NOT word</code><span>exclude; <code>NOT ( a b )</code> excludes a group</span></button>
+      <button type="button" data-ins="( )"><code>( … )</code><span>group terms, e.g. <code>x (a OR b)</code></span></button>
+      <button type="button" data-ins="*"><code>word*</code><span>prefix: <code>tour*</code> matches tours, tourism</span></button>
+      <button type="button" data-ins="+"><code>+word</code><span>must appear, even outside Strict</span></button>
+      <button type="button" data-ins="intitle:"><code>intitle:word</code><span>word must be in the title</span></button>
+      <button type="button" data-ins="inurl:"><code>inurl:word</code><span>word must be in the URL</span></button>
     </div>
 
     <button type="button" class="tune" id="tuneBtn" aria-expanded="false">Engines &amp; filters <span aria-hidden="true">▾</span></button>
@@ -63,9 +70,12 @@
         <label class="qb-f phr"><span><b>" "</b> this exact phrase</span><input id="qbPhrase" placeholder="multibeam survey" spellcheck="false"></label>
         <label class="qb-f or"><span><b>OR</b> any of these words</span><input id="qbAny" placeholder="bathymetry hydrography" spellcheck="false"></label>
         <label class="qb-f not"><span><b>NOT</b> none of these words</span><input id="qbNone" placeholder="tourism hotel" spellcheck="false"></label>
+        <label class="qb-f ttl"><span><b>intitle:</b> words in the title</span><input id="qbTitle" placeholder="history" spellcheck="false"></label>
+        <label class="qb-f url"><span><b>inurl:</b> words in the URL</span><input id="qbUrl" placeholder="archive" spellcheck="false"></label>
         <label class="qb-f site"><span><b>site:</b> only this domain</span><input id="qbSite" placeholder="noaa.gov" spellcheck="false" inputmode="url"></label>
         <label class="qb-f nsite"><span><b>-site:</b> never this domain</span><input id="qbNoSite" placeholder="pinterest.com" spellcheck="false" inputmode="url"></label>
       </div>
+      <p class="qb-hint">End a word with <code>*</code> to match by prefix, e.g. <code>light*</code>. AND fields must all hold, OR needs any one, NOT never.</p>
       <div class="qb-actions"><button type="button" id="qbApply">Use query</button><button type="button" id="qbDive" class="primary">Use &amp; dive</button><button type="button" id="qbClear" class="ghost">Clear</button></div>
     </div>
     <div class="controls">
@@ -84,6 +94,7 @@
           <span class="seg-group" id="time">
             <button type="button" data-v="">Any</button><button type="button" data-v="day">Day</button><button type="button" data-v="week">Week</button><button type="button" data-v="month">Month</button><button type="button" data-v="year">Year</button>
           </span>
+          <span class="dated" id="datedWrap" title="Also drop results with no date"><input type="checkbox" id="dated"><span class="sw"></span><span class="lbl">Dated only</span></span>
         </label>
       </div>
       <div class="ctl engines" role="group" aria-label="Engines" id="engines"></div>
@@ -105,7 +116,7 @@
             <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button>
           </span>
         </label>
-        <label class="ctl toggle" title="Show only results that contain every word and phrase"><input type="checkbox" id="strict"><span class="sw"></span><span class="lbl">Strict</span></label>
+        <label class="ctl toggle" title="The whole expression must hold literally: every required term in the title, snippet or URL"><input type="checkbox" id="strict"><span class="sw"></span><span class="lbl">Strict</span></label>
         <label class="ctl dig minm">
           <span class="lbl">Min match <b id="minVal">0</b><small>%</small></span>
           <input type="range" id="minm" min="0" max="100" step="5" value="0">
