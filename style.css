@@ -198,7 +198,7 @@ mark{background:rgba(70,240,224,.16);color:#e9fffd;border-radius:3px;padding:0 2
 .results.grid .card .badge{font-size:10px;padding:2px 7px 2px 6px}
 .results.grid.cat-images .media{aspect-ratio:1/1}
 .results.grid.cat-images .card h3{font-size:12.5px;font-weight:500;color:var(--ink2)}
-.results.grid .res-tag{position:absolute;z-index:2;right:8px;top:8px;padding:2px 6px;border-radius:6px;background:rgba(0,0,0,.6);font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.85)}
+.results.grid .res-tag{position:absolute;z-index:2;left:8px;top:8px;padding:2px 6px;border-radius:6px;background:rgba(0,0,0,.6);font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.85)}
 .results.grid .empty,.results.grid .floor,.results.grid .skeleton,.results.grid #sort{flex-wrap:wrap}
 .near select{background:rgba(0,0,0,.35);color:var(--ink);border:1px solid var(--line2);border-radius:8px;padding:6px 8px;font:inherit;font-size:12.5px;outline:0}
 .near select:focus{border-color:var(--cyan)}
