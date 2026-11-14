@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+<meta name="googlebot" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: http: data:; connect-src https: http:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="theme-color" content="#01060d">
+<title>DeepSearch</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%2346f0e0' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%2346f0e0' stroke-opacity='.55' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%2346f0e0'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="abyss" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+
+<aside class="depth" aria-hidden="true">
+  <div class="depth-track"><div class="depth-fill" id="depthFill"></div></div>
+  <div class="depth-read"><span id="depthNum">0</span><small>m</small></div>
+  <div class="depth-zone" id="depthZone">SURFACE</div>
+</aside>
+
+<header class="top">
+  <a class="brand" href="./" aria-label="DeepSearch home">
+    <svg viewBox="0 0 40 40" class="brand-mark" aria-hidden="true"><circle cx="20" cy="20" r="17"/><circle cx="20" cy="20" r="10"/><circle cx="20" cy="20" r="3" class="core"/></svg>
+    <span>DEEP<b>SEARCH</b></span>
+  </a>
+  <div class="top-status"><span class="dot" id="linkDot"></span><span id="linkText">no uplink</span></div>
+  <button class="icon-btn" id="openSettings" aria-label="Settings" title="Settings">
+    <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+  </button>
+</header>
+
+<main id="main">
+  <section class="hero" id="hero">
+    <p class="eyebrow">METASEARCH · EIGHT ENGINES · ONE DESCENT</p>
+    <h1>Go <em>below</em> the first page.</h1>
+    <p class="sub">Eight engines searched at once from your own server, merged into one list and ranked by how closely results match your exact words.</p>
+  </section>
+
+  <form class="search" id="searchForm" role="search" autocomplete="off">
+    <div class="search-shell">
+      <div class="sonar" aria-hidden="true"><i></i><i></i><i></i></div>
+      <input id="q" name="q" type="search" placeholder='"exact phrase" -exclude site:example.com' aria-label="Search query" spellcheck="false" enterkeyhint="search">
+      <button type="button" class="help-btn" id="helpBtn" aria-expanded="false" aria-controls="ops" title="Search operators">?</button>
+      <button type="submit" class="dive-btn"><span>DIVE</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></button>
+    </div>
+    <div class="ops" id="ops" hidden>
+      <button type="button" data-ins='""'><code>"exact phrase"</code><span>must contain the whole phrase, in order</span></button>
+      <button type="button" data-ins="-"><code>-word</code><span>exclude anything containing <i>word</i></span></button>
+      <button type="button" data-ins="site:"><code>site:domain.com</code><span>only results from one domain</span></button>
+      <button type="button" data-ins=" OR "><code>a OR b</code><span>either term, uppercase OR</span></button>
+    </div>
+
+    <button type="button" class="tune" id="tuneBtn" aria-expanded="false">Engines &amp; filters <span aria-hidden="true">▾</span></button>
+    <div class="controls">
+      <div class="ctl engines" role="group" aria-label="Engines" id="engines"></div>
+      <div class="ctl-row">
+        <label class="ctl seg" aria-label="SafeSearch">
+          <span class="lbl">SafeSearch</span>
+          <span class="seg-group" id="safe">
+            <button type="button" data-v="0">Off</button><button type="button" data-v="1">Moderate</button><button type="button" data-v="2">Strict</button>
+          </span>
+        </label>
+        <label class="ctl dig">
+          <span class="lbl">Deep Dig <b id="digVal">1</b><small> page<span id="digS"></span>/engine</small></span>
+          <input type="range" id="dig" min="1" max="5" step="1" value="1">
+          <span class="dig-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </label>
+        <label class="ctl seg" aria-label="Sort">
+          <span class="lbl">Sort</span>
+          <span class="seg-group" id="sort">
+            <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button>
+          </span>
+        </label>
+        <label class="ctl toggle"><input type="checkbox" id="dedupe"><span class="sw"></span><span class="lbl">One per domain</span></label>
+      </div>
+      <div class="chips-row">
+        <span class="lbl">site:</span>
+        <div class="chips" id="chips"></div>
+        <button type="button" class="chip edit" id="editChips">Edit</button>
+      </div>
+      <div class="chip-editor" id="chipEditor" hidden>
+        <input id="chipInput" placeholder="add domain, e.g. reddit.com" aria-label="Add site chip">
+        <button type="button" id="chipAdd">Add</button>
+        <button type="button" id="chipDone" class="ghost">Done</button>
+      </div>
+    </div>
+  </form>
+
+  <section class="status" id="status" aria-live="polite"></section>
+  <section class="results" id="results"></section>
+  <div class="sentinel" id="sentinel"><span class="loader" id="loader" hidden><i></i><i></i><i></i></span></div>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Settings">
+  <div class="drawer-head"><h2>Uplink</h2><button class="icon-btn" id="closeSettings" aria-label="Close">✕</button></div>
+  <label class="field"><span>API base URL</span><input id="apiBase" placeholder="https://your-searxng.example" spellcheck="false" inputmode="url"></label>
+  <label class="field"><span>Access token</span><input id="token" type="password" placeholder="paste once, stored on this device" spellcheck="false" autocomplete="off"></label>
+  <label class="field"><span>Search path</span><input id="apiPath" placeholder="/search" spellcheck="false"></label>
+  <div class="drawer-actions">
+    <button type="button" id="saveSettings">Save</button>
+    <button type="button" id="testSettings" class="ghost">Test connection</button>
+    <button type="button" id="clearSettings" class="ghost danger">Forget token</button>
+  </div>
+  <p class="drawer-note" id="settingsNote"></p>
+  <p class="drawer-fine">Settings stay in this browser's localStorage. The token is sent only to the API base above as <code>Authorization: Bearer</code>. No analytics, no trackers, no cookies. Every link opens with <code>noreferrer</code>.</p>
+</aside>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
