@@ -29,6 +29,7 @@ const state = {
   dig: LS.get("dig", 1),
   sort: LS.get("sort", "relevance"),
   dedupe: LS.get("dedupe", false),
+  views: LS.get("views", { general: "list", images: "grid", videos: "grid" }), thumbProxy: CFG.thumbProxy === undefined ? "auto" : CFG.thumbProxy,
   cat: LS.get("cat", "general"), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
@@ -160,7 +161,11 @@ function paintDig() {
 dig.addEventListener("input", () => { state.dig = +dig.value; LS.set("dig", state.dig); paintDig(); });
 dig.addEventListener("change", () => { if (state.q) runSearch(); });
 paintDig();
-seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); if (state.q) runSearch(); });
+const curView = () => state.views[state.cat] || (state.cat === "general" ? "list" : "grid");
+let paintView = () => {};
+seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); if (state.q) runSearch(); });
+(() => { const g = $("#view"); paintView = v => g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === v)); })();
+seg("#view", curView(), v => { state.views[state.cat] = v; LS.set("views", state.views); render(true); });
 seg("#time", state.time, v => { state.time = v; LS.set("time", v); if (state.q) runSearch(); });
 const st = $("#strict"); st.checked = state.strict;
 st.addEventListener("change", () => { state.strict = st.checked; LS.set("strict", st.checked); render(true); });
@@ -215,6 +220,27 @@ ops.addEventListener("click", e => {
   else { const pre = (s > 0 && !/\s$/.test(v.slice(0, s)) && ins !== " OR ") ? " " : ""; out = pre + ins + sel; caret = s + out.length; }
   qi.value = v.slice(0, s) + out + v.slice(en); qi.focus(); qi.setSelectionRange(caret, caret);
 });
+
+/* query builder */
+const qb = $("#qb"), qbBtn = $("#qbBtn");
+qbBtn.onclick = () => { qb.hidden = !qb.hidden; qbBtn.setAttribute("aria-expanded", !qb.hidden); if (!qb.hidden) { ops.hidden = true; help.setAttribute("aria-expanded", "false"); $("#qbAll").focus(); } qbPreview(); };
+help.addEventListener("click", () => { if (!ops.hidden) { qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); } });
+const words = id => $(id).value.replace(/"/g, " ").split(/[\s,]+/).map(w => w.trim().replace(/^-+/, "")).filter(Boolean);
+function buildQuery() {
+  const parts = [...words("#qbAll")];
+  const ph = $("#qbPhrase").value.replace(/"/g, "").trim(); if (ph) parts.push(`"${ph}"`);
+  const any = words("#qbAny"); if (any.length === 1) parts.push(any[0]); else if (any.length > 1) parts.push("(" + any.join(" OR ") + ")");
+  for (const w of words("#qbNone")) parts.push("-" + w);
+  const s = cleanDomain($("#qbSite").value); if (s) parts.push("site:" + s);
+  for (const d of $("#qbNoSite").value.split(/[\s,]+/).map(cleanDomain).filter(Boolean)) parts.push("-site:" + d);
+  return parts.join(" ");
+}
+function qbPreview() { const q = buildQuery(); $("#qbPreview").textContent = q || "fill any field below"; }
+qb.addEventListener("input", qbPreview);
+$("#qbApply").onclick = () => { const q = buildQuery(); if (q) { qi.value = q; qi.focus(); } };
+$("#qbDive").onclick = () => { const q = buildQuery(); if (!q) return; qi.value = q; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); runSearch(); };
+$("#qbClear").onclick = () => { qb.querySelectorAll("input").forEach(i => i.value = ""); qbPreview(); };
+qb.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("#qbDive").click(); } });
 
 /* settings drawer */
 const drawer = $("#drawer"), scrim = $("#scrim");
@@ -313,8 +339,15 @@ function normalize(raw, apiPage) {
     url, title: String(raw.title || url), content: String(raw.content || ""),
     host: raw.host || hostOf(url), engines, sources,
     thumb: safeUrl(raw.thumbnail || raw.thumbnail_src || raw.img_src || ""),
-    length: raw.length || null, match: raw.match || null
+    img: safeUrl(raw.img_src || raw.image || ""),
+    kind: raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
+    length: fmtLen(raw.length), match: raw.match || null
   };
+}
+function fmtLen(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" || /^\d+(\.\d+)?$/.test(String(v))) { let s = Math.round(+v), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s %= 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
+  return String(v).replace(/^0:(\d\d:\d\d)$/, "$1").slice(0, 12);
 }
 function absPos(pos, page, P) { pos = +pos || 1; page = +page || 1; return pos > P ? pos : (page - 1) * P + pos; }
 
@@ -347,7 +380,7 @@ async function runSearch() {
   const q = fullQuery();
   if (!q) return;
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
-  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; state.facets = new Set();
+  state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; state.facets = new Set(); state.catMismatch = null;
   if (ctrl) ctrl.abort();
   document.body.classList.add("diving");
   const u = new URL(location.href); u.hash = "q=" + encodeURIComponent(qi.value.trim()); history.replaceState(null, "", u);
@@ -371,6 +404,7 @@ async function loadMore(first) {
   for (const s of settled) {
     if (s.status === "rejected") { if (s.reason && s.reason.name !== "AbortError") err = s.reason; continue; }
     const { j, p } = s.value;
+    if (state.cat !== "general" && j.category && j.category !== state.cat) state.catMismatch = j.category;
     if (isGateway()) { if (j.hasMore) anyMore = true; }
     else if ((j.results || []).length) anyMore = true;
     for (const u of j.unresponsive || j.unresponsive_engines || []) {
@@ -434,6 +468,7 @@ function sorted() {
 }
 function render(reset, err) {
   const list = sorted(), box = $("#results");
+  box.className = "results" + (curView() === "grid" ? " grid" : "") + " cat-" + state.cat;
   const bThreshold = (() => { const bs = list.map(r => r.b).sort((a, b) => b - a); return bs[Math.floor(bs.length * 0.2)] || Infinity; })();
   if (reset) { box.innerHTML = ""; rendered = 0; }
   else if (state.sort === "buried" || state.dedupe) { box.innerHTML = ""; rendered = 0; } // re-rank entire list
@@ -441,6 +476,7 @@ function render(reset, err) {
   list.slice(rendered).forEach((r, i) => frag.appendChild(card(r, i, r.b >= bThreshold && r.m.exact && r.engines.length <= 2)));
   box.appendChild(frag); rendered = list.length;
   if (!list.length) box.innerHTML = err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No results matched. Loosen a quote, drop a -exclude, lower Min match, turn off Strict, or switch on more engines.</div>`;
+  if (state.catMismatch && reset !== "x") box.insertAdjacentHTML("afterbegin", `<div class="notice">The server doesn't serve the ${esc(state.cat)} category yet, so it returned ${esc(state.catMismatch)} results instead.</div>`);
   status(list.length, err);
   if (!state.hasMore && list.length) box.insertAdjacentHTML("beforeend", `<div class="floor">— OCEAN FLOOR · ${list.length} RESULTS —</div>`);
 }
@@ -453,17 +489,51 @@ function card(r, i, buried) {
   const tags = [
     r.m.exact ? '<span class="meta-tag ex">exact</span>' : "",
     buried ? '<span class="meta-tag bur">buried</span>' : "",
-    r.length ? `<span class="meta-tag">${esc(r.length)}</span>` : "",
     r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : ""
   ].join("");
-  el.innerHTML = `<div class="card-main">
+  const src = r.thumb || (r.kind === "image" ? r.img : "");
+  const showMedia = !!src || r.kind !== "web" || curView() === "grid";
+  if (showMedia) el.classList.add("has-media");
+  const media = showMedia ? `<a class="media${src ? "" : " failed"}" href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer" tabindex="-1" aria-hidden="true">
+      <span class="ph">${PH_SVG}<em>${src ? "" : r.kind === "video" ? "video" : r.kind === "image" ? "image" : esc(r.host)}</em></span>
+      ${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}">` : ""}
+      ${r.kind === "video" ? `<span class="play">${PLAY_SVG}</span>` : ""}
+      ${r.length ? `<span class="dur">${esc(r.length)}</span>` : ""}
+      ${curView() === "grid" ? `<span class="res-host">${esc(r.host)}</span>` : ""}
+    </a>` : "";
+  el.innerHTML = media + `<div class="card-main">
     <div class="crumb"><span class="host">${esc(r.host)}</span><span class="path">${esc(path)}</span></div>
     <h3><a href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">${highlight(r.title, r.m.hits)}</a></h3>
     <p>${highlight(r.content, r.m.hits)}</p>
-    <div class="badges">${badges}${tags}</div></div>
-    ${r.thumb ? `<img class="thumb" src="${esc(r.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" decoding="async">` : ""}`;
-  const img = el.querySelector(".thumb"); if (img) img.onerror = () => img.remove();
+    <div class="badges">${badges}${tags}</div></div>`;
+  const img = el.querySelector(".media img"); if (img) thumbIO.observe(img);
   return el;
+}
+const PH_SVG = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="10" opacity=".6"/><circle cx="24" cy="24" r="2.5" fill="rgba(70,240,224,.7)" stroke="none"/></svg>';
+const PLAY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>';
+/* thumbnails: lazy, via token-protected /api/thumb proxy when the server has it, else direct with no-referrer */
+const thumbCache = new Map(); let thumbActive = 0; const thumbQ = [];
+const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); queueThumb(e.target); } }, { rootMargin: "400px 0px" });
+function queueThumb(img) { thumbQ.push(img); pumpThumbs(); }
+function pumpThumbs() { while (thumbActive < 6 && thumbQ.length) { const img = thumbQ.shift(); thumbActive++; loadThumb(img).finally(() => { thumbActive--; pumpThumbs(); }); } }
+function thumbDone(img, ok) { const m = img.closest(".media"); if (!m) return; m.classList.toggle("loaded", ok); m.classList.toggle("failed", !ok); if (!ok) img.remove(); }
+function direct(img, src) {
+  return new Promise(res => { img.onload = () => { thumbDone(img, img.naturalWidth > 2); res(); }; img.onerror = () => { thumbDone(img, false); res(); }; img.src = src; });
+}
+async function loadThumb(img) {
+  const src = img.dataset.src;
+  if (thumbCache.has(src)) { const c = thumbCache.get(src); return c ? direct(img, c) : direct(img, src); }
+  if (isGateway() && state.thumbProxy && state.token && state.apiBase) {
+    try {
+      const r = await fetch(state.apiBase + "/api/thumb?url=" + encodeURIComponent(src), { headers: { Authorization: "Bearer " + state.token }, credentials: "omit", referrerPolicy: "no-referrer" });
+      if (r.status === 404 && state.thumbProxy === "auto") { state.thumbProxy = false; }
+      else if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) {
+        const u = URL.createObjectURL(await r.blob()); thumbCache.set(src, u); if (state.thumbProxy === "auto") state.thumbProxy = true; return direct(img, u);
+      }
+    } catch { if (state.thumbProxy === "auto") state.thumbProxy = false; }
+  }
+  thumbCache.set(src, null);
+  return direct(img, src);
 }
 function status(n, err) {
   const parts = [];
@@ -481,7 +551,7 @@ function status(n, err) {
 /* infinite scroll */
 new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && state.q && !state.loading && state.hasMore) loadMore(false); }, { rootMargin: "600px 0px" }).observe($("#sentinel"));
 
-$("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
+$("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
 addEventListener("click", e => { if (e.target.closest(".card,.badge,a,button,input")) return; ping(e.clientX, e.clientY, false); });
 
 renderEngines(); renderChips(); setDepth();

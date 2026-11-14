@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
 <meta name="googlebot" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: http: data:; connect-src https: http:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: http: data: blob:; connect-src https: http:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="theme-color" content="#01060d">
 <title>DeepSearch</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%2346f0e0' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%2346f0e0' stroke-opacity='.55' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%2346f0e0'/%3E%3C/svg%3E">
@@ -44,6 +44,7 @@
     <div class="search-shell">
       <div class="sonar" aria-hidden="true"><i></i><i></i><i></i></div>
       <input id="q" name="q" type="search" placeholder='"exact phrase" -exclude site:example.com' aria-label="Search query" spellcheck="false" enterkeyhint="search">
+      <button type="button" class="help-btn qb-btn" id="qbBtn" aria-expanded="false" aria-controls="qb" title="Query builder"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
       <button type="button" class="help-btn" id="helpBtn" aria-expanded="false" aria-controls="ops" title="Search operators">?</button>
       <button type="submit" class="dive-btn"><span>DIVE</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14M6 12l6 6 6-6"/></svg></button>
     </div>
@@ -55,11 +56,29 @@
     </div>
 
     <button type="button" class="tune" id="tuneBtn" aria-expanded="false">Engines &amp; filters <span aria-hidden="true">▾</span></button>
+    <div class="qb" id="qb" hidden>
+      <div class="qb-head"><span class="lbl">Query builder</span><span class="qb-preview" id="qbPreview"></span></div>
+      <div class="qb-grid">
+        <label class="qb-f and"><span><b>AND</b> all of these words</span><input id="qbAll" placeholder="ocean sonar mapping" spellcheck="false"></label>
+        <label class="qb-f phr"><span><b>" "</b> this exact phrase</span><input id="qbPhrase" placeholder="multibeam survey" spellcheck="false"></label>
+        <label class="qb-f or"><span><b>OR</b> any of these words</span><input id="qbAny" placeholder="bathymetry hydrography" spellcheck="false"></label>
+        <label class="qb-f not"><span><b>NOT</b> none of these words</span><input id="qbNone" placeholder="tourism hotel" spellcheck="false"></label>
+        <label class="qb-f site"><span><b>site:</b> only this domain</span><input id="qbSite" placeholder="noaa.gov" spellcheck="false" inputmode="url"></label>
+        <label class="qb-f nsite"><span><b>-site:</b> never this domain</span><input id="qbNoSite" placeholder="pinterest.com" spellcheck="false" inputmode="url"></label>
+      </div>
+      <div class="qb-actions"><button type="button" id="qbApply">Use query</button><button type="button" id="qbDive" class="primary">Use &amp; dive</button><button type="button" id="qbClear" class="ghost">Clear</button></div>
+    </div>
     <div class="controls">
       <div class="tabs-row">
         <span class="seg-group tabs" id="cat" role="tablist" aria-label="Category">
-          <button type="button" data-v="general">Web</button><button type="button" data-v="videos">Videos</button>
+          <button type="button" data-v="general">Web</button><button type="button" data-v="images">Images</button><button type="button" data-v="videos">Videos</button>
         </span>
+        <label class="ctl seg" aria-label="View">
+          <span class="lbl">View</span>
+          <span class="seg-group" id="view">
+            <button type="button" data-v="list" title="List"><svg viewBox="0 0 24 24" class="vi"><path d="M4 6h16M4 12h16M4 18h16"/></svg>List</button><button type="button" data-v="grid" title="Grid"><svg viewBox="0 0 24 24" class="vi"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>Grid</button>
+          </span>
+        </label>
         <label class="ctl seg" aria-label="Recency">
           <span class="lbl">Recency</span>
           <span class="seg-group" id="time">
