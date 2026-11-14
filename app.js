@@ -35,6 +35,7 @@ const state = {
   sort: LS.get("sort", "relevance"),
   dedupe: LS.get("dedupe", false),
   views: LS.get("views", { general: "list", images: "grid", videos: "grid" }), thumbProxy: CFG.thumbProxy === undefined ? "auto" : CFG.thumbProxy,
+  hideSeen: LS.get("hideSeen", false), exclude: LS.get("exclude", ""), saved: LS.get("saved", []), activeSaved: null, knownSnap: null,
   cat: LS.get("cat", "general"), phrase: LS.get("phrase", false), dated: LS.get("dated", false), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
@@ -246,6 +247,104 @@ ops.addEventListener("click", e => {
   qi.value = v.slice(0, s) + out + v.slice(en); qi.focus(); qi.setSelectionRange(caret, caret);
 });
 
+/* seen history (opened or dismissed), capped */
+const seen = new Set(LS.get("seen", []));
+function markSeen(url) { if (seen.has(url)) return; seen.add(url); const arr = [...seen]; LS.set("seen", arr.slice(-5000)); }
+const hs = $("#hideSeen"); hs.checked = state.hideSeen;
+hs.addEventListener("change", () => { state.hideSeen = hs.checked; LS.set("hideSeen", hs.checked); render(true); });
+$("#results").addEventListener("click", e => {
+  const d = e.target.closest(".dismiss");
+  if (d) { e.preventDefault(); const c = d.closest(".card"); markSeen(c.dataset.url); if (state.hideSeen) { c.style.transition = "opacity .25s, transform .25s"; c.style.opacity = 0; c.style.transform = "scale(.97)"; setTimeout(() => render(true), 250); } else { c.classList.add("seen"); } return; }
+  const a = e.target.closest(".card a[href]"); if (a) { const c = a.closest(".card"); markSeen(c.dataset.url); setTimeout(() => c.classList.add("seen"), 300); }
+});
+$("#results").addEventListener("auxclick", e => { const a = e.target.closest(".card a[href]"); if (a && e.button === 1) { markSeen(a.closest(".card").dataset.url); a.closest(".card").classList.add("seen"); } });
+
+/* always exclude (settings drawer) */
+function excludeTerms() { const out = []; String(state.exclude || "").replace(/"([^"]+)"|([^,\s]+)/g, (m, p, w) => { const t = (p || w || "").trim().replace(/^-+/, ""); if (t) out.push(p ? `-"${t}"` : "-" + t); return m; }); return out; }
+
+/* saved searches + creator follows: rerun on open, count results not seen in that search before */
+const saveBtn = $("#saveSearch");
+function persistSaved() { LS.set("saved", state.saved); paintSavedBadge(); }
+function paintSavedBadge() { const n = state.saved.reduce((s, x) => s + (x.newCount || 0), 0); const b = $("#savedBadge"); b.hidden = !n; b.textContent = n > 99 ? "99+" : n; }
+const savedKey = (q, cat) => cat + "|" + q.trim().toLowerCase();
+function findSaved(q, cat) { return state.saved.find(s => savedKey(s.q, s.cat) === savedKey(q, cat)); }
+function paintSaveBtn() { const q = qi.value.trim(); saveBtn.hidden = !state.q || !q; const s = q && findSaved(q, state.cat); saveBtn.classList.toggle("on", !!s); saveBtn.textContent = s ? "★ Saved" : "☆ Save search"; }
+saveBtn.onclick = () => {
+  const q = qi.value.trim(); if (!q) return;
+  const s = findSaved(q, state.cat);
+  if (s) state.saved = state.saved.filter(x => x !== s);
+  else { const n = { id: Date.now().toString(36), type: "search", label: q, q, cat: state.cat, known: [...state.results.keys()].slice(0, 400), newCount: 0, lastRun: Date.now() }; state.saved.unshift(n); state.activeSaved = n; state.knownSnap = new Set(n.known); }
+  persistSaved(); paintSaveBtn(); renderSaved();
+};
+function addFollow(name) {
+  name = name.replace(/"/g, "").trim(); if (!name) return;
+  const q = `"${name}"`, cat = state.cat === "general" ? "videos" : state.cat;
+  if (findSaved(q, cat)) return;
+  state.saved.unshift({ id: Date.now().toString(36), type: "creator", label: name, q, cat, known: [], newCount: 0, lastRun: 0 });
+  persistSaved(); renderSaved(); checkSaved([state.saved[0]]);
+}
+$("#followAdd").onclick = () => { addFollow($("#followInput").value); $("#followInput").value = ""; };
+$("#followInput").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("#followAdd").click(); } });
+const ago = t => { if (!t) return "never checked"; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago"; };
+function renderSaved() {
+  const box = $("#savedList"); box.innerHTML = "";
+  if (!state.saved.length) { box.innerHTML = '<div class="saved-empty">Nothing saved yet. Run a search and tap ☆ Save search, or follow a creator above.</div>'; return; }
+  for (const s of state.saved) {
+    const el = document.createElement("div"); el.className = "saved-item";
+    el.innerHTML = `<button type="button" class="si-main"><span class="si-type"></span><span class="si-q"></span><span class="si-meta"></span></button><span class="si-new"></span><button type="button" class="si-del" aria-label="Remove">✕</button>`;
+    el.querySelector(".si-type").textContent = (s.type === "creator" ? "Following · " : "Search · ") + KIND[s.cat];
+    el.querySelector(".si-q").textContent = s.type === "creator" ? "@" + s.label : s.label;
+    el.querySelector(".si-meta").textContent = (s.checking ? "checking…" : "checked " + ago(s.lastRun)) + (s.error ? " · " + s.error : "");
+    const nb = el.querySelector(".si-new"); nb.textContent = s.newCount ? "+" + s.newCount : "0"; nb.classList.toggle("zero", !s.newCount); nb.title = "new since last time";
+    el.querySelector(".si-main").onclick = () => openSaved(s);
+    el.querySelector(".si-del").onclick = () => { state.saved = state.saved.filter(x => x !== s); persistSaved(); renderSaved(); paintSaveBtn(); };
+    box.appendChild(el);
+  }
+}
+function savedUrl(s) {
+  const keep = { cat: state.cat, phrase: state.phrase, facets: state.facets };
+  state.cat = s.cat; state.facets = new Set();
+  const u = buildUrl([s.q, ...excludeTerms()].join(" "), 1);
+  Object.assign(state, keep); return u;
+}
+let checking = false;
+async function checkSaved(list) {
+  if (!state.token || !state.apiBase || checking) return;
+  checking = true;
+  for (const s of list || state.saved.slice(0, 15)) {
+    s.checking = true; renderSaved();
+    try {
+      const j = await apiFetch(savedUrl(s));
+      const known = new Set(s.known || []);
+      const urls = (j.results || []).map(r => safeUrl(r.url)).filter(Boolean);
+      if (!s.lastRun && !known.size) { s.known = urls.slice(0, 400); s.newCount = 0; s.firstRun = true; }
+      else s.newCount = urls.filter(u => !known.has(u)).length;
+      s.error = ""; s.lastRun = Date.now();
+    } catch (e) { s.error = /Rate/.test(e.message) ? "rate limited" : "failed"; }
+    s.checking = false; persistSaved(); renderSaved();
+    await new Promise(r => setTimeout(r, 1200));
+  }
+  checking = false;
+}
+function openSaved(s) {
+  openSavedDrawer(false);
+  state.cat = s.cat; LS.set("cat", s.cat);
+  $("#cat").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === s.cat)); renderEngines(); paintView(curView());
+  qi.value = s.q; state.activeSaved = s; state.knownSnap = new Set(s.known || []);
+  runSearch();
+}
+function settleSaved() {
+  const s = state.activeSaved; if (!s || !state.saved.includes(s)) return;
+  const known = new Set(s.known || []); for (const u of state.results.keys()) known.add(u);
+  s.known = [...known].slice(-1500); s.newCount = 0; s.lastRun = Date.now(); persistSaved(); renderSaved();
+}
+const savedDrawer = $("#savedDrawer");
+function openSavedDrawer(o) { savedDrawer.classList.toggle("open", o); savedDrawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) renderSaved(); }
+$("#openSaved").onclick = () => openSavedDrawer(true);
+$("#closeSaved").onclick = () => openSavedDrawer(false);
+$("#refreshSaved").onclick = () => checkSaved();
+$("#clearSeen").onclick = () => { seen.clear(); LS.del("seen"); render(true); };
+
 /* exact phrase toggle */
 const phraseBtn = $("#phraseBtn");
 phraseBtn.setAttribute("aria-pressed", state.phrase);
@@ -281,14 +380,16 @@ qb.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(
 
 /* settings drawer */
 const drawer = $("#drawer"), scrim = $("#scrim");
-function openDrawer(o) { drawer.classList.toggle("open", o); drawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) { $("#apiBase").value = state.apiBase; $("#apiPath").value = state.apiPath; $("#token").value = state.token; $("#settingsNote").textContent = ""; } }
+function openDrawer(o) { drawer.classList.toggle("open", o); drawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) { $("#apiBase").value = state.apiBase; $("#apiPath").value = state.apiPath; $("#token").value = state.token; $("#alwaysExclude").value = state.exclude; $("#settingsNote").textContent = ""; } }
 $("#openSettings").onclick = () => openDrawer(true);
-$("#closeSettings").onclick = scrim.onclick = () => openDrawer(false);
-addEventListener("keydown", e => { if (e.key === "Escape") openDrawer(false); });
+$("#closeSettings").onclick = () => openDrawer(false);
+scrim.onclick = () => { openDrawer(false); openSavedDrawer(false); };
+addEventListener("keydown", e => { if (e.key === "Escape") { openDrawer(false); openSavedDrawer(false); } });
 function saveSettings() {
   state.apiBase = $("#apiBase").value.trim().replace(/\/+$/, "");
   state.apiPath = ("/" + ($("#apiPath").value.trim() || "/api/search").replace(/^\/+/, ""));
   state.token = $("#token").value.replace(/\s+/g, "");
+  state.exclude = $("#alwaysExclude").value.trim(); LS.set("exclude", state.exclude);
   LS.set("apiBase", state.apiBase); LS.set("apiPath", state.apiPath); LS.set("token", state.token);
   setLink(state.token && state.apiBase ? "warn" : "", state.apiBase ? (state.token ? "uplink set" : "token needed") : "no uplink");
 }
@@ -328,6 +429,7 @@ function fullQuery() {
   const a = state.activeChips;
   if (a.length === 1) q += ` site:${a[0]}`;
   else if (a.length > 1) q += " (" + a.map(d => "site:" + d).join(" OR ") + ")";
+  const ex = excludeTerms(); if (q && ex.length) q += " " + ex.join(" ");
   return q.trim();
 }
 
@@ -386,7 +488,8 @@ function normalize(raw, apiPage) {
     url, title: String(raw.title || url), content: String(raw.content || ""),
     host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
     proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
-    resolution: raw.resolution || null,
+    resolution: raw.resolution || null, date: raw.publishedDate ? Date.parse(raw.publishedDate) || null : null,
+    dupes: +(raw.duplicates || raw.collapsed || raw.dupes || 0) || 0,
     thumb: safeUrl(raw.thumbnail || raw.thumbnail_src || raw.img_src || ""),
     img: safeUrl(raw.img_src || raw.image || ""),
     kind: raw.kind === "videos" ? "video" : raw.kind === "images" ? "image" : raw.kind === "web" ? "web" : raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
@@ -428,6 +531,7 @@ const pq0 = () => parseQuery(state.q);
 async function runSearch(keepFacets) {
   const q = fullQuery();
   if (!q) return;
+  if (state.activeSaved && savedKey(state.activeSaved.q, state.activeSaved.cat) !== savedKey(qi.value, state.cat)) { state.activeSaved = null; state.knownSnap = null; }
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
   state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null;
   if (ctrl) ctrl.abort();
@@ -469,7 +573,7 @@ async function loadMore(first) {
       const prev = state.results.get(r.url);
       if (prev) {
         for (const s2 of r.sources) { const o = prev.sources.find(x => x.engine === s2.engine); if (!o) prev.sources.push(s2); else if (s2.pos != null && (o.pos == null || s2.pos < o.pos)) o.pos = s2.pos; }
-        prev.engines = [...new Set([...prev.engines, ...r.engines])];
+        prev.engines = [...new Set([...prev.engines, ...r.engines])]; prev.dupes = (prev.dupes || 0) + 1;
       } else { r.idx = state.order++; r.m = matchInfo(r, pq); state.results.set(r.url, r); got++; }
     }
   }
@@ -479,7 +583,8 @@ async function loadMore(first) {
   state.loading = false; document.body.classList.remove("busy"); $("#loader").hidden = true;
   renderEngines();
   render(first, err);
-  setDepth();
+  setDepth(); paintSaveBtn();
+  if (first && !err && state.activeSaved) settleSaved();
   if (got) ping(innerWidth * (0.2 + Math.random() * 0.6), innerHeight * 0.8, false);
 }
 
@@ -525,7 +630,14 @@ function sorted() {
   let list = [...state.results.values()].filter(r => (gw || ((!state.strict || r.m.exact) && r.m.strength >= state.minm)) && (!ph || hasPhrase(r, ph)));
   renderFacets(list);
   if (state.facets.size && !gw) list = list.filter(r => state.facets.has(r.domain || r.host));
-  list.sort(state.sort === "buried" ? (a, b) => b.b - a.b || a.idx - b.idx : (a, b) => a.idx - b.idx);
+  if (state.hideSeen) list = list.filter(r => !seen.has(r.url));
+  const rar = r => { const ps = r.sources.map(s => s.pos).filter(x => x != null); return Math.log2(1 + (ps.length ? Math.min(...ps) : 10)) / Math.max(1, r.engines.length); };
+  const cmp = {
+    buried: (a, b) => b.b - a.b || a.idx - b.idx,
+    rarity: (a, b) => rar(b) - rar(a) || a.idx - b.idx,
+    oldest: (a, b) => (a.date ?? Infinity) - (b.date ?? Infinity) || a.idx - b.idx
+  }[state.sort] || ((a, b) => a.idx - b.idx);
+  list.sort(cmp);
   if (state.dedupe) {
     const seen = new Map(), out = [];
     for (const r of list) { if (seen.has(r.host)) { seen.get(r.host).more++; continue; } r.more = 0; seen.set(r.host, r); out.push(r); }
@@ -549,14 +661,19 @@ function render(reset, err) {
 }
 function card(r, i, buried) {
   const el = document.createElement("article");
-  el.className = "card" + (buried ? " buried" : ""); el.style.setProperty("--i", Math.min(i, 12));
+  el.className = "card" + (buried ? " buried" : "") + (seen.has(r.url) ? " seen" : ""); el.style.setProperty("--i", Math.min(i, 12));
+  el.dataset.url = r.url;
   const path = (() => { try { const u = new URL(r.url); return (u.pathname + u.search).replace(/\/$/, ""); } catch { return ""; } })();
   const srcs = [...r.sources].sort((a, b) => (a.pos ?? 999) - (b.pos ?? 999));
   const badges = srcs.map(s => `<span class="badge" style="--c:${engColor(s.engine)}" title="${esc(engName(s.engine))}${s.pos ? " ranked #" + s.pos : ""}"><i></i>${esc(engName(s.engine))}${s.pos ? ` <b>#${s.pos}</b>` : ""}</span>`).join("");
   const tags = [
     r.m.exact ? '<span class="meta-tag ex">exact</span>' : "",
     buried ? '<span class="meta-tag bur">buried</span>' : "",
-    r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : ""
+    r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : "",
+    state.knownSnap && state.knownSnap.size && !state.knownSnap.has(r.url) ? '<span class="meta-tag new-t">new</span>' : "",
+    r.dupes ? `<span class="meta-tag dup" title="Identical copies merged into this result">⧉ ${r.dupes} duplicate${r.dupes > 1 ? "s" : ""} collapsed</span>` : "",
+    r.date && state.sort === "oldest" ? `<span class="meta-tag date">${esc(new Date(r.date).toISOString().slice(0, 10))}</span>` : "",
+    seen.has(r.url) ? '<span class="meta-tag seen-t">seen</span>' : ""
   ].join("");
   const direct = r.thumb || (r.kind === "image" ? r.img : "");
   const src = r.proxy || direct;
@@ -574,25 +691,33 @@ function card(r, i, buried) {
     <div class="crumb"><span class="host">${esc(r.host)}</span><span class="path">${esc(path)}</span></div>
     <h3><a href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">${highlight(r.title, r.m.hits)}</a></h3>
     <p>${highlight(r.content, r.m.hits)}</p>
-    <div class="badges">${badges}${tags}</div></div>`;
+    <div class="badges">${badges}${tags}</div></div>
+    <button type="button" class="dismiss" aria-label="Dismiss" title="Dismiss (mark as seen)">✕</button>`;
   const img = el.querySelector(".media img"); if (img) thumbIO.observe(img);
   return el;
 }
 const PH_SVG = '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="10" opacity=".6"/><circle cx="24" cy="24" r="2.5" fill="rgba(70,240,224,.7)" stroke="none"/></svg>';
 const PLAY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>';
 /* thumbnails: lazy. Signed /api/thumb proxy URL first (no hotlink, no referer), then the direct URL with no-referrer, then a placeholder */
-const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); loadThumb(e.target); } }, { rootMargin: "500px 0px" });
+// The proxy serves 4 fetches in flight per client, so queue proxy loads 4 at a time and retry once before falling back.
+const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); queueThumb(e.target); } }, { rootMargin: "500px 0px" });
+const thumbQ = []; let thumbActive = 0;
+function queueThumb(img) { thumbQ.push(img); pumpThumbs(); }
+function pumpThumbs() { while (thumbActive < 4 && thumbQ.length) { const img = thumbQ.shift(); if (!img.isConnected) continue; thumbActive++; loadThumb(img, () => { thumbActive--; pumpThumbs(); }); } }
 function thumbDone(img, ok) { const m = img.closest(".media"); if (!m) return; m.classList.toggle("loaded", ok); m.classList.toggle("failed", !ok); if (!ok) img.remove(); }
-function loadThumb(img) {
-  const tries = [img.dataset.src, img.dataset.direct].filter(Boolean);
-  const next = () => {
-    const u = tries.shift();
-    if (!u) return thumbDone(img, false);
-    img.onload = () => img.naturalWidth > 2 ? thumbDone(img, true) : next();
-    img.onerror = next;
-    img.src = u;
+function loadThumb(img, release) {
+  const proxied = img.dataset.src && img.dataset.direct;
+  const tries = proxied ? [img.dataset.src, img.dataset.src, img.dataset.direct] : [img.dataset.src];
+  let released = false; const rel = () => { if (!released) { released = true; release(); } };
+  const next = (i) => {
+    const u = tries[i];
+    if (!u) { rel(); return thumbDone(img, false); }
+    if (u === img.dataset.direct) rel();           // direct loads don't count against the proxy's in-flight limit
+    img.onload = () => { rel(); img.naturalWidth > 2 ? thumbDone(img, true) : next(i + 1); };
+    img.onerror = () => i === 0 && proxied ? setTimeout(() => next(1), 700) : next(i + 1);
+    img.removeAttribute("src"); img.src = u;
   };
-  next();
+  next(0);
 }
 function status(n, err) {
   const parts = [];
@@ -601,6 +726,7 @@ function status(n, err) {
     parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.strict ? " · strict" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
     const counts = Object.entries(state.counts).filter(([, v]) => v).map(([k, v]) => `${esc(engName(k))} ${v}`);
     if (counts.length) parts.push(`<span>answered: ${counts.join(" · ")}</span>`);
+    if (state.hideSeen) { const h = [...state.results.keys()].filter(u => seen.has(u)).length; if (h) parts.push(`<span>${h} seen hidden</span>`); }
     if (state.dropped) { const d = Object.entries(state.dropped).filter(([, v]) => v).map(([k, v]) => `${esc(k)} ${v}`); if (d.length) parts.push(`<span>filtered out: ${d.join(" · ")}</span>`); }
     if (state.unresponsive.size) parts.push(`<span class="warn unr">unresponsive: ${[...state.unresponsive].map(([k, w]) => `${esc(engName(k))} (${esc(w)})`).join(" · ")}</span>`);
     if (isGateway() && state.safe !== 0) parts.push(`<span class="warn">SafeSearch is set to Off on the server, so this filter isn't applied</span>`);
@@ -614,7 +740,8 @@ new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && state.q &
 $("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
 addEventListener("click", e => { if (e.target.closest(".card,.badge,a,button,input")) return; ping(e.clientX, e.clientY, false); });
 
-renderEngines(); renderChips(); setDepth(); loadCatalog();
+renderEngines(); renderChips(); setDepth(); loadCatalog(); paintSavedBadge();
+setTimeout(() => checkSaved(), 1500);
 $("#tuneBtn").onclick = () => { const o = document.body.classList.toggle("tune-open"); $("#tuneBtn").setAttribute("aria-expanded", o); };
 const hq = new URLSearchParams(location.hash.slice(1)).get("q");
 if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';

@@ -28,6 +28,9 @@
     <span>DEEP<b>SEARCH</b></span>
   </a>
   <div class="top-status"><span class="dot" id="linkDot"></span><span id="linkText">no uplink</span></div>
+  <button class="icon-btn saved-btn" id="openSaved" aria-label="Saved searches" title="Saved searches &amp; follows">
+    <svg viewBox="0 0 24 24"><path d="M6 3.5h12v17l-6-4-6 4z"/></svg><span class="nbadge" id="savedBadge" hidden>0</span>
+  </button>
   <button class="icon-btn" id="openSettings" aria-label="Settings" title="Settings">
     <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
   </button>
@@ -35,9 +38,9 @@
 
 <main id="main">
   <section class="hero" id="hero">
-    <p class="eyebrow">METASEARCH · EIGHT ENGINES · ONE DESCENT</p>
+    <p class="eyebrow">METASEARCH · WEB · IMAGES · VIDEO · ONE DESCENT</p>
     <h1>Go <em>below</em> the first page.</h1>
-    <p class="sub">Eight engines searched at once from your own server, merged into one list and ranked by how closely results match your exact words.</p>
+    <p class="sub">Dozens of engines searched at once from your own server, merged into one list and ranked by how closely results match your exact words.</p>
   </section>
 
   <form class="search" id="searchForm" role="search" autocomplete="off">
@@ -113,7 +116,7 @@
         <label class="ctl seg" aria-label="Sort">
           <span class="lbl">Sort</span>
           <span class="seg-group" id="sort">
-            <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button>
+            <button type="button" data-v="relevance">Relevance</button><button type="button" data-v="buried">Buried</button><button type="button" data-v="rarity">Rarity</button><button type="button" data-v="oldest">Oldest</button>
           </span>
         </label>
         <label class="ctl toggle" title="The whole expression must hold literally: every required term in the title, snippet or URL"><input type="checkbox" id="strict"><span class="sw"></span><span class="lbl">Strict</span></label>
@@ -121,6 +124,7 @@
           <span class="lbl">Min match <b id="minVal">0</b><small>%</small></span>
           <input type="range" id="minm" min="0" max="100" step="5" value="0">
         </label>
+        <label class="ctl toggle" title="Hide results you've opened or dismissed"><input type="checkbox" id="hideSeen"><span class="sw"></span><span class="lbl">Hide seen</span></label>
         <label class="ctl toggle"><input type="checkbox" id="dedupe"><span class="sw"></span><span class="lbl">One per domain</span></label>
       </div>
       <div class="chips-row">
@@ -136,7 +140,7 @@
     </div>
   </form>
 
-  <section class="status" id="status" aria-live="polite"></section>
+  <div class="status-wrap"><section class="status" id="status" aria-live="polite"></section><button type="button" class="save-search" id="saveSearch" hidden>☆ Save search</button></div>
   <section class="facets" id="facets" hidden></section>
   <section class="results" id="results"></section>
   <div class="sentinel" id="sentinel"><span class="loader" id="loader" hidden><i></i><i></i><i></i></span></div>
@@ -147,6 +151,7 @@
   <div class="drawer-head"><h2>Uplink</h2><button class="icon-btn" id="closeSettings" aria-label="Close">✕</button></div>
   <label class="field"><span>API base URL</span><input id="apiBase" placeholder="https://your-searxng.example" spellcheck="false" inputmode="url"></label>
   <label class="field"><span>Access token</span><input id="token" type="password" placeholder="paste once, stored on this device" spellcheck="false" autocomplete="off"></label>
+  <label class="field"><span>Always exclude</span><input id="alwaysExclude" placeholder="words or &quot;phrases&quot;, comma separated" spellcheck="false"></label>
   <label class="field"><span>Search path</span><input id="apiPath" placeholder="/search" spellcheck="false"></label>
   <div class="drawer-actions">
     <button type="button" id="saveSettings">Save</button>
@@ -155,6 +160,14 @@
   </div>
   <p class="drawer-note" id="settingsNote"></p>
   <p class="drawer-fine">Settings stay in this browser's localStorage. The token is sent only to the API base above as <code>Authorization: Bearer</code>. No analytics, no trackers, no cookies. Every link opens with <code>noreferrer</code>.</p>
+</aside>
+
+<aside class="drawer" id="savedDrawer" aria-hidden="true" aria-label="Saved searches">
+  <div class="drawer-head"><h2>Saved</h2><button class="icon-btn" id="closeSaved" aria-label="Close">✕</button></div>
+  <p class="drawer-fine intro">Saved searches and followed creators rerun each time you open DeepSearch. The badge counts results you haven't seen in that search before. Everything stays in this browser.</p>
+  <div class="follow-row"><input id="followInput" placeholder="Follow a creator or uploader name" spellcheck="false"><button type="button" id="followAdd">Follow</button></div>
+  <div class="saved-list" id="savedList"></div>
+  <div class="drawer-actions"><button type="button" id="refreshSaved" class="ghost">Check all now</button><button type="button" id="clearSeen" class="ghost danger">Clear seen history</button></div>
 </aside>
 
 <script src="config.js"></script>
