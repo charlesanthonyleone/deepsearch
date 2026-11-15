@@ -50,6 +50,7 @@ const state = {
 };
 const NOW_Y = new Date().getFullYear();
 state.era = LS.get("era", [1990, NOW_Y]); state.deadOnly = LS.get("deadOnly", false); state.timeSort = LS.get("timeSort", "leasttouched"); state.timeType = LS.get("timeType", "any");
+state.savedResults = LS.get("savedResults", []);
 state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = "";
 const isGateway = () => /\/api\/search\/?$/.test(state.apiPath);
 
@@ -391,7 +392,7 @@ function settleSaved() {
   s.known = [...known].slice(-1500); s.newCount = 0; s.lastRun = Date.now(); persistSaved(); renderSaved();
 }
 const savedDrawer = $("#savedDrawer");
-function openSavedDrawer(o) { savedDrawer.classList.toggle("open", o); savedDrawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) renderSaved(); }
+function openSavedDrawer(o) { savedDrawer.classList.toggle("open", o); savedDrawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) { renderSaved(); renderSavedResults(); } }
 $("#openSaved").onclick = () => openSavedDrawer(true);
 $("#closeSaved").onclick = () => openSavedDrawer(false);
 $("#refreshSaved").onclick = () => checkSaved();
@@ -855,7 +856,7 @@ function pumpThumbs() {
   while (thumbActive < 4 && thumbQ.length) {
     // in-viewport thumbnails first, then the ones just below
     let k = thumbQ.findIndex(inView); if (k < 0) k = 0;
-    const img = thumbQ.splice(k, 1)[0]; if (!img.isConnected) continue;
+    const img = thumbQ.splice(k, 1)[0]; if (!img.isConnected || (img.closest("#results,#similarGrid") && !img.dataset.near)) { delete img.dataset.queued; continue; }
     thumbActive++; fetchThumb(img).finally(() => { thumbActive--; delete img.dataset.queued; pumpThumbs(); });
   }
 }
@@ -864,6 +865,7 @@ addEventListener("scroll", () => { if (thumbQ.length) pumpThumbs(); }, { passive
 async function fetchThumb(img) {
   const src = img.dataset.src;
   for (let attempt = 0; attempt < 4; attempt++) {
+    if (!img.isConnected || (img.closest("#results,#similarGrid") && !img.dataset.near)) return;
     let r;
     try { r = await fetch(src, { credentials: "omit", referrerPolicy: "no-referrer" }); } catch { break; }
     if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) {
@@ -926,8 +928,6 @@ setTimeout(() => checkSaved(), 1500);
 function setTune(o) { document.body.classList.toggle("tune-open", o); $("#tuneBtn").setAttribute("aria-expanded", o); $("#sheetScrim").hidden = !o; }
 $("#tuneBtn").onclick = () => setTune(!document.body.classList.contains("tune-open"));
 $("#sheetClose").onclick = $("#sheetScrim").onclick = () => setTune(false);
-const hq = new URLSearchParams(location.hash.slice(1)).get("q");
-if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';
 
 /* -------- in-page viewer + more-like-this -------- */
 const canView = r => r && (r.kind === "image" || r.kind === "video" || !!r.embed);
@@ -967,7 +967,7 @@ function showItem(r) {
 
 function renderStage(r) {
   const stage = $("#viewerStage");
-  releaseThumbs(stage); stage.innerHTML = "";
+  releaseThumbs(stage); stage.innerHTML = ""; stage.style.minHeight = ""; stage.classList.remove("suspended"); stage.dataset.canSuspend = "0";
   const embed = safeEmbed(r.embed);
   if (embed) {
     const f = document.createElement("iframe");
@@ -980,7 +980,7 @@ function renderStage(r) {
     // get the bare origin only (never the path or query). Every other player gets no referrer.
     f.setAttribute("referrerpolicy", /^https:\/\/(www\.youtube-nocookie\.com|xhamster\.com)\//.test(embed) ? "strict-origin" : "no-referrer");
     f.title = r.title || "Video";
-    stage.appendChild(f);
+    stage.appendChild(f); stage.dataset.canSuspend = "1";
     return;
   }
   if (r.kind === "video") { stage.appendChild(fallbackMedia(r, "This site doesn't play here. Open it on the site, or copy the link into an incognito tab.")); return; }
@@ -988,6 +988,7 @@ function renderStage(r) {
   const direct = r.img || r.thumb || "";
   if (!src) { stage.appendChild(fallbackMedia(r, "No preview available.")); return; }
   const img = document.createElement("img");
+  stage.dataset.canSuspend = "1";
   img.className = "viewer-img";
   img.alt = r.alt || r.title || "";
   img.decoding = "async";
@@ -1011,7 +1012,7 @@ async function loadSimilar(r, page, append) {
   viewer.simAbort = ac;
   const cat = (state.cat === "images" || r.kind === "image") ? "images" : (state.cat === "general" && r.kind === "web") ? "web" : "videos";
   try {
-    const p = new URLSearchParams({ url: r.url, title: r.title || "", content: (r.content || "").slice(0, 300), categories: cat, type: cat, site: r.host || "", page: String(page) });
+    const p = new URLSearchParams({ url: r.url, title: r.title || "", tags: (r.content || "").slice(0, 300), categories: cat, type: cat, site: r.host || "", page: String(page) });
     if (r.creator) p.set("creator", r.creator);
     if (r.tags && r.tags.length) p.set("tags", r.tags.join(" ").slice(0, 300));
     const data = await apiFetch(state.apiBase + state.apiPath.replace(/\/search\/?$/, "/similar") + "?" + p, ac.signal);
@@ -1057,7 +1058,7 @@ function actuallyHideViewer() {
   viewer.stack = [];
   if (viewer.simAbort) viewer.simAbort.abort();
   $("#viewer").hidden = true;
-  releaseThumbs($("#viewerStage")); $("#viewerStage").innerHTML = "";
+  releaseThumbs($("#viewerStage")); $("#viewerStage").innerHTML = ""; $("#viewerStage").style.minHeight = "";
   releaseThumbs($("#similarGrid")); $("#similarGrid").innerHTML = "";
   document.body.classList.remove("viewer-open");
   document.body.style.top = "";
@@ -1212,7 +1213,7 @@ async function addDigSite(site, btn) {
   try {
     const j = await apiFetch(digBase() + "/api/dig/sites?site=" + encodeURIComponent(site), undefined, "POST");
     state.digSites = j.sites || state.digSites; renderDigSites(); paintSuggestedSources();
-    toast(`Added ${j.added && j.added.site ? j.added.site : hostOf(site) || site} to dig list`);
+    toast(`${j.added === false ? "Already on" : "Added to"} dig list: ${hostOf(site) || site}`);
     if (btn) btn.textContent = "On dig list";
   } catch (e) { toast(e.message); if (btn) { btn.disabled = false; btn.textContent = btn.dataset.prev || "Add"; } }
 }
@@ -1247,7 +1248,6 @@ function toast(msg, action) {
   if (action) { const b = document.createElement("button"); b.type = "button"; b.textContent = action.label; b.onclick = () => { action.run(b); }; t.append(b); }
   t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => { t.classList.remove("show"); t.hidden = true; }, action ? 6000 : 2200);
 }
-state.savedResults = LS.get("savedResults", []);
 function saveResult(r, btn) {
   if (!r) return;
   if (!state.savedResults.find(x => x.url === r.url)) { state.savedResults.unshift({ url: r.url, title: r.title, host: r.host, at: Date.now() }); state.savedResults = state.savedResults.slice(0, 300); LS.set("savedResults", state.savedResults); }
@@ -1325,4 +1325,33 @@ function paintTimeTab() {
   pt(); g.onclick = e => { const b = e.target.closest("button"); if (!b) return; state.timeType = b.dataset.v; LS.set("timeType", b.dataset.v); pt(); if (state.q) requestSearch(); };
   paintTimeTab();
 })();
+
+function renderSavedResults() {
+  const box = $("#savedResultList"); box.innerHTML = "";
+  if (!state.savedResults.length) { box.innerHTML = '<div class="saved-empty">Tap ☆ Save on a result to keep its link here.</div>'; return; }
+  for (const r of state.savedResults) {
+    const el = document.createElement("div"); el.className = "saved-item saved-result-item";
+    el.innerHTML = '<a class="si-main" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer"><span class="si-type"></span><span class="si-q"></span></a><button type="button" class="sr-dig" title="Add site to dig list">+ Dig</button><button type="button" class="si-del" aria-label="Remove saved result">✕</button>';
+    el.querySelector("a").href = safeUrl(r.url); el.querySelector(".si-type").textContent = r.host || hostOf(r.url); el.querySelector(".si-q").textContent = r.title;
+    el.querySelector(".sr-dig").onclick = e => addDigSite(r.url, e.currentTarget);
+    el.querySelector(".si-del").onclick = () => { state.savedResults = state.savedResults.filter(x => x.url !== r.url); LS.set("savedResults", state.savedResults); renderSavedResults(); };
+    box.appendChild(el);
+  }
+}
+// A long suggestion scroll should not keep a hidden player decoding frames.
+const stageIO = new IntersectionObserver(es => { for (const e of es) {
+  const st = e.target;
+  if (!viewer.open || e.isIntersecting || st.dataset.canSuspend !== "1") continue;
+  const r = viewer.stack[viewer.stack.length - 1]; if (!r) continue;
+  const height = st.getBoundingClientRect().height;
+  releaseThumbs(st); st.innerHTML = ""; st.dataset.canSuspend = "0"; st.classList.add("suspended");
+  st.style.minHeight = Math.max(200, height) + "px";
+  const preview = fallbackMedia(r, "Preview paused while off-screen to save memory.");
+  st.appendChild(preview);
+  const b = document.createElement("button"); b.type = "button"; b.className = "resume-media"; b.textContent = r.kind === "video" ? "Resume player" : "Reload full photo";
+  b.onclick = () => { st.style.minHeight = ""; renderStage(r); }; st.appendChild(b);
+} }, { root: $("#viewer"), rootMargin: "300px 0px" });
+stageIO.observe($("#viewerStage"));
+const hq = new URLSearchParams(location.hash.slice(1)).get("q");
+if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';
 })();

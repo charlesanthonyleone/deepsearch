@@ -447,3 +447,8 @@ body.timesearch .tabs-row>.ctl{display:none!important}
 .suggested-sources{display:block}.ss-head{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin-bottom:6px}
 .ss-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
 .ss-row .chip{flex:none}
+.saved-section{font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink2);font-weight:400;margin:8px 0 0}
+#savedResultList{display:flex;flex-direction:column;gap:8px}.sr-dig{flex:none;border:1px solid rgba(255,184,92,.4);border-radius:8px;color:#ffe0a8;background:rgba(255,184,92,.08);font:11px var(--mono);padding:6px 8px}
+.viewer-stage.suspended{position:relative;display:flex;flex-direction:column;justify-content:center;align-items:center}
+.viewer-stage.suspended .viewer-fallback{min-height:180px}.viewer-stage.suspended .viewer-fallback img{max-height:240px}
+.resume-media{border:1px solid var(--cyan);background:rgba(70,240,224,.15);color:var(--cyan);border-radius:10px;font:12px var(--mono);padding:10px 14px;margin:8px}
