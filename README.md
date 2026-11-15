@@ -9,6 +9,7 @@ A static metasearch front end in an abyss theme. It sits on top of a private Sea
 - Relevance sort, plus a Buried sort that favors exact matches that few engines found and that ranked low
 - Badges that show which engine found each result and at what rank
 - One-per-domain dedupe, infinite scroll, and site: quick-filter chips you can edit
+- Tap a photo or video to open an in-page viewer (full-screen on mobile; Back, swipe down, or Esc closes it). Videos play in the source site's official embed when one exists; otherwise you get the thumbnail plus Open on site and Copy link. Under the player, More like this loads live related results.
 - No analytics, trackers or cookies. The page is noindex, and every link opens with `rel="noreferrer noopener"`
 
 ## Backend

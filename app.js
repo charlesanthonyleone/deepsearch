@@ -258,6 +258,13 @@ $("#results").addEventListener("click", e => {
   if (copy) { e.preventDefault(); e.stopPropagation(); copyLink(copy.closest(".card").dataset.url, copy); return; }
   const d = e.target.closest(".dismiss");
   if (d) { e.preventDefault(); const c = d.closest(".card"); markSeen(c.dataset.url); if (state.hideSeen) { c.style.transition = "opacity .25s, transform .25s"; c.style.opacity = 0; c.style.transform = "scale(.97)"; setTimeout(() => render(true), 250); } else { c.classList.add("seen"); } return; }
+  const media = e.target.closest(".card .media");
+  const title = e.target.closest(".card h3 a");
+  if ((media || title) && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+    const card = (media || title).closest(".card");
+    const r = state.results.get(card.dataset.url);
+    if (r && canView(r)) { e.preventDefault(); openViewer(r); return; }
+  }
   const a = e.target.closest(".card a[href]"); if (a) { const c = a.closest(".card"); markSeen(c.dataset.url); setTimeout(() => c.classList.add("seen"), 300); }
 });
 async function copyLink(url, btn) {
@@ -536,6 +543,8 @@ async function apiFetch(url, signal) {
 }
 const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
 const safeUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : ""; } catch { return ""; } };
+const EMBED_ORIGINS = new Set(["https://www.pornhub.com","https://www.xvideos.com","https://www.xnxx.com","https://xhamster.com","https://embed.redtube.com","https://www.eporner.com","https://player.tnaflix.com","https://www.youtube-nocookie.com","https://player.vimeo.com","https://www.dailymotion.com"]);
+function safeEmbed(u) { try { const x = new URL(u); return x.protocol === "https:" && EMBED_ORIGINS.has(x.origin) ? x.href : ""; } catch { return ""; } }
 // Normalize either backend's result into one shape.
 function normalize(raw, apiPage) {
   const url = safeUrl(raw.url); if (!url) return null;
@@ -554,6 +563,8 @@ function normalize(raw, apiPage) {
     url, title: String(raw.title || url), content: String(raw.content || ""),
     host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
     proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
+    imgProxy: raw.imageProxy && /^\/api\/thumb\?/.test(raw.imageProxy) ? state.apiBase + raw.imageProxy : "",
+    embed: safeEmbed(raw.embed),
     resolution: raw.resolution || null, date: raw.publishedDate ? Date.parse(raw.publishedDate) || null : null,
     dupes: 0, dupList: Array.isArray(raw.duplicates) ? raw.duplicates.filter(d => d && d.url) : [],
     views: typeof raw.views === "number" ? raw.views : null, rarity: typeof raw.rarity === "number" ? raw.rarity : null,
@@ -866,4 +877,190 @@ $("#tuneBtn").onclick = () => setTune(!document.body.classList.contains("tune-op
 $("#sheetClose").onclick = $("#sheetScrim").onclick = () => setTune(false);
 const hq = new URLSearchParams(location.hash.slice(1)).get("q");
 if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';
+
+/* -------- in-page viewer + more-like-this -------- */
+const canView = r => r && (r.kind === "image" || r.kind === "video" || r.embed || r.proxy || r.thumb || r.img);
+const viewer = { open: false, stack: [], scrollY: 0, closing: false, similarFor: "", similarPage: 1, simAbort: null };
+
+function openViewer(r) {
+  if (!r) return;
+  markSeen(r.url);
+  document.querySelectorAll(".card").forEach(c => { if (c.dataset.url === r.url) c.classList.add("seen"); });
+  if (!viewer.open) {
+    viewer.scrollY = window.scrollY;
+    document.body.classList.add("viewer-open");
+    document.body.style.top = "-" + viewer.scrollY + "px";
+    $("#viewer").hidden = false;
+    viewer.open = true;
+  }
+  viewer.stack.push(r);
+  history.pushState({ dsv: viewer.stack.length }, "", location.href);
+  showItem(r);
+}
+
+function showItem(r) {
+  $("#viewerBack").hidden = viewer.stack.length < 2;
+  $("#viewerTitle").textContent = r.title || r.host || "View";
+  $("#viewerOpen").href = r.url;
+  $("#viewerCopy").onclick = ev => { ev.preventDefault(); copyLink(r.url, ev.currentTarget); };
+  renderStage(r);
+  viewer.similarPage = 1;
+  viewer.similarFor = r.url;
+  $("#similarGrid").innerHTML = "";
+  $("#similarMore").hidden = true;
+  $("#similarStatus").textContent = "Finding more…";
+  if (viewer.simAbort) viewer.simAbort.abort();
+  requestAnimationFrame(() => setTimeout(() => loadSimilar(r, 1, false), 40));
+}
+
+function renderStage(r) {
+  const stage = $("#viewerStage");
+  stage.innerHTML = "";
+  const embed = safeEmbed(r.embed);
+  if (embed) {
+    const f = document.createElement("iframe");
+    f.className = "viewer-frame";
+    f.src = embed;
+    f.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation allow-popups");
+    f.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
+    f.setAttribute("allowfullscreen", "");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.title = r.title || "Video";
+    stage.appendChild(f);
+    return;
+  }
+  if (r.kind === "video") { stage.appendChild(fallbackMedia(r, "This site doesn't play here. Open it on the site, or copy the link into an incognito tab.")); return; }
+  const src = r.imgProxy || r.proxy || r.img || r.thumb;
+  const direct = r.img || r.thumb || "";
+  if (!src) { stage.appendChild(fallbackMedia(r, "No preview available.")); return; }
+  const img = document.createElement("img");
+  img.className = "viewer-img";
+  img.alt = r.alt || r.title || "";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  if (/\/api\/thumb\?/.test(src)) { img.dataset.src = src; img.dataset.direct = direct; stage.appendChild(img); queueThumb(img); }
+  else { img.src = src; stage.appendChild(img); }
+}
+
+function fallbackMedia(r, msg) {
+  const wrap = document.createElement("div");
+  wrap.className = "viewer-fallback";
+  const src = r.proxy || r.thumb || r.img || "";
+  wrap.innerHTML = (src ? `<span class="media"><img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}"></span>` : "") + `<p>${esc(msg)}</p>`;
+  const img = wrap.querySelector("img"); if (img) queueThumb(img);
+  return wrap;
+}
+
+async function loadSimilar(r, page, append) {
+  if (!isGateway()) { $("#similarStatus").textContent = "Suggestions need the DeepSearch uplink."; return; }
+  const ac = new AbortController();
+  viewer.simAbort = ac;
+  const cat = (state.cat === "images" || r.kind === "image") ? "images" : (state.cat === "general" && r.kind === "web") ? "web" : "videos";
+  try {
+    const p = new URLSearchParams({ url: r.url, title: r.title || "", content: r.content || "", categories: cat, page: String(page) });
+    const data = await apiFetch(state.apiBase + state.apiPath.replace(/\/search\/?$/, "/similar") + "?" + p, ac.signal);
+    if (viewer.similarFor !== r.url) return;
+    const rows = (data.results || []).map(x => normalize(x, page)).filter(Boolean);
+    const grid = $("#similarGrid");
+    if (!append) grid.innerHTML = "";
+    const have = new Set([...grid.querySelectorAll("[data-url]")].map(el => el.dataset.url));
+    have.add(r.url);
+    for (const s of rows) {
+      if (have.has(s.url)) continue;
+      have.add(s.url);
+      grid.appendChild(similarCard(s));
+    }
+    $("#similarStatus").textContent = grid.children.length ? "" : "No similar results right now.";
+    viewer.similarPage = page;
+    $("#similarMore").hidden = !data.hasMore;
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    if (viewer.similarFor !== r.url) return;
+    $("#similarStatus").textContent = e.message || "Couldn't load suggestions.";
+    $("#similarMore").hidden = true;
+  }
+}
+
+function similarCard(r) {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "similar-card";
+  el.dataset.url = r.url;
+  const src = r.proxy || r.thumb || r.img || "";
+  el.innerHTML = `<span class="media${src ? "" : " failed"}">${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}">` : ""}</span><span class="similar-cap"><b>${esc(r.title)}</b><i>${esc(r.host)}</i></span>`;
+  const img = el.querySelector("img"); if (img) thumbIO.observe(img);
+  el.addEventListener("click", () => openViewer(r));
+  return el;
+}
+
+function actuallyHideViewer() {
+  viewer.open = false;
+  viewer.stack = [];
+  if (viewer.simAbort) viewer.simAbort.abort();
+  $("#viewer").hidden = true;
+  $("#viewerStage").innerHTML = "";
+  $("#similarGrid").innerHTML = "";
+  document.body.classList.remove("viewer-open");
+  document.body.style.top = "";
+  window.scrollTo(0, viewer.scrollY || 0);
+}
+
+function closeViewer() {
+  if (!viewer.open) return;
+  const n = viewer.stack.length;
+  actuallyHideViewer();
+  if (n) { viewer.closing = true; history.go(-n); }
+}
+
+addEventListener("popstate", () => {
+  if (viewer.closing) {
+    if (!history.state || !history.state.dsv) viewer.closing = false;
+    return;
+  }
+  if (!viewer.open) return;
+  if (viewer.stack.length > 1) {
+    viewer.stack.pop();
+    showItem(viewer.stack[viewer.stack.length - 1]);
+  } else {
+    actuallyHideViewer();
+  }
+});
+
+$("#viewerClose").onclick = closeViewer;
+$("#viewerBack").onclick = () => { if (viewer.stack.length > 1) history.back(); else closeViewer(); };
+$("#similarMore").onclick = () => {
+  const r = viewer.stack[viewer.stack.length - 1];
+  if (r) loadSimilar(r, (viewer.similarPage || 1) + 1, true);
+};
+addEventListener("keydown", e => {
+  if (e.key === "Escape" && viewer.open) { e.preventDefault(); closeViewer(); }
+});
+
+(function swipeClose() {
+  const v = $("#viewer");
+  let y0 = 0, x0 = 0, tracking = false, dy = 0;
+  v.addEventListener("touchstart", ev => {
+    if (ev.touches.length !== 1) return;
+    if (ev.target.closest("iframe,button,a,.similar-grid")) return;
+    if (v.scrollTop > 8) return;
+    tracking = true; y0 = ev.touches[0].clientY; x0 = ev.touches[0].clientX; dy = 0;
+  }, { passive: true });
+  v.addEventListener("touchmove", ev => {
+    if (!tracking) return;
+    dy = ev.touches[0].clientY - y0;
+    const dx = ev.touches[0].clientX - x0;
+    if (dy > 0 && dy > Math.abs(dx)) {
+      $("#viewerSheet").style.transform = "translateY(" + Math.min(dy, 240) + "px)";
+      $("#viewerSheet").style.opacity = String(Math.max(0.4, 1 - dy / 400));
+    }
+  }, { passive: true });
+  v.addEventListener("touchend", () => {
+    if (!tracking) return;
+    tracking = false;
+    const sheet = $("#viewerSheet");
+    if (dy > 90) { sheet.style.transform = ""; sheet.style.opacity = ""; closeViewer(); }
+    else { sheet.style.transform = ""; sheet.style.opacity = ""; }
+  });
+})();
+
 })();

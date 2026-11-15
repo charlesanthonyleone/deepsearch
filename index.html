@@ -6,11 +6,11 @@
 <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
 <meta name="googlebot" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: http: data: blob:; connect-src https: http:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src https: http: data: blob:; connect-src https: http:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src https://www.pornhub.com https://www.xvideos.com https://www.xnxx.com https://xhamster.com https://embed.redtube.com https://www.eporner.com https://player.tnaflix.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.dailymotion.com">
 <meta name="theme-color" content="#01060d">
 <title>DeepSearch</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%2346f0e0' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%2346f0e0' stroke-opacity='.55' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%2346f0e0'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css?v=20261114c">
+<link rel="stylesheet" href="style.css?v=20261114d">
 </head>
 <body>
 <canvas id="abyss" aria-hidden="true"></canvas>
@@ -179,9 +179,32 @@
   <div class="drawer-actions"><button type="button" id="refreshSaved" class="ghost">Check all now</button><button type="button" id="clearSeen" class="ghost danger">Clear seen history</button></div>
 </aside>
 
+
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="viewerTitle">
+  <div class="viewer-sheet" id="viewerSheet">
+    <div class="viewer-grab" aria-hidden="true"></div>
+    <header class="viewer-bar">
+      <button type="button" class="viewer-nav" id="viewerBack" hidden>Back</button>
+      <h2 class="viewer-title" id="viewerTitle"></h2>
+      <button type="button" class="viewer-nav viewer-close" id="viewerClose" aria-label="Close">✕</button>
+    </header>
+    <div class="viewer-stage" id="viewerStage"></div>
+    <div class="viewer-actions">
+      <a class="viewer-open" id="viewerOpen" href="#" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">Open on site</a>
+      <button type="button" class="copy-link" id="viewerCopy">Copy link</button>
+    </div>
+    <section class="viewer-similar" aria-live="polite">
+      <h3>More like this</h3>
+      <div class="similar-grid" id="similarGrid"></div>
+      <p class="similar-status" id="similarStatus"></p>
+      <button type="button" class="similar-more" id="similarMore" hidden>More</button>
+    </section>
+  </div>
+</div>
+
 <div class="toast" id="toast" hidden role="status" aria-live="polite">Copied</div>
 
-<script src="config.js?v=20261114c"></script>
-<script src="app.js?v=20261114c"></script>
+<script src="config.js?v=20261114d"></script>
+<script src="app.js?v=20261114d"></script>
 </body>
 </html>
