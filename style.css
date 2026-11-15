@@ -452,3 +452,8 @@ body.timesearch .tabs-row>.ctl{display:none!important}
 .viewer-stage.suspended{position:relative;display:flex;flex-direction:column;justify-content:center;align-items:center}
 .viewer-stage.suspended .viewer-fallback{min-height:180px}.viewer-stage.suspended .viewer-fallback img{max-height:240px}
 .resume-media{border:1px solid var(--cyan);background:rgba(70,240,224,.15);color:var(--cyan);border-radius:10px;font:12px var(--mono);padding:10px 14px;margin:8px}
+
+.close-head{grid-column:1/-1;margin:22px 0 8px;padding:12px 14px;border-top:1px dashed rgba(255,184,92,.45);color:var(--ink2);font-family:var(--mono)}
+.close-head h2{margin:0;font-size:15px;letter-spacing:.08em;color:#ffe0a8;text-transform:uppercase}.close-head small{display:block;margin-top:3px;font-size:11.5px}
+.card.close{opacity:.82;border-style:dashed}
+.filters-on{color:var(--amber)}.filters-on .chip{margin-left:6px;padding:3px 9px;font-size:11px}

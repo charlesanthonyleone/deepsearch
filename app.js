@@ -51,7 +51,7 @@ const state = {
 const NOW_Y = new Date().getFullYear();
 state.era = LS.get("era", [1990, NOW_Y]); state.deadOnly = LS.get("deadOnly", false); state.timeSort = LS.get("timeSort", "leasttouched"); state.timeType = LS.get("timeType", "any");
 state.savedResults = LS.get("savedResults", []);
-state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = "";
+state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = ""; state.close = new Map();
 const isGateway = () => /\/api\/search\/?$/.test(state.apiPath);
 
 /* ---------------- abyss canvas ---------------- */
@@ -637,7 +637,7 @@ async function runSearch(keepFacets) {
   const q = fullQuery();
   if (!q) return;
   if (state.activeSaved && savedKey(state.activeSaved.q, state.activeSaved.cat) !== savedKey(qi.value, state.cat)) { state.activeSaved = null; state.knownSnap = null; }
-  state.visibleLimit = BATCH; state.suggestedSources = []; state.discovered = []; state.digStatus = ""; paintSuggestedSources(); releaseThumbs();
+  state.visibleLimit = BATCH; state.suggestedSources = []; state.discovered = []; state.digStatus = ""; state.close = new Map(); paintSuggestedSources(); releaseThumbs();
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
   state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null; state.dedupeInfo = null;
   if (ctrl) ctrl.abort();
@@ -689,8 +689,13 @@ async function loadMore(first, manual) {
       state.unresponsive.set(String(name).toLowerCase(), why);
     }
     if (j.engines && !Array.isArray(j.engines)) for (const [k, v] of Object.entries(j.engines)) state.counts[k] = (state.counts[k] || 0) + v;
+    for (const raw of j.close || []) {
+      const r = normalize(raw, p); if (!r || state.results.has(r.url) || state.close.has(r.url)) continue;
+      r.idx = state.close.size; r.m = matchInfo(r, pq); r.m.exact = false; r.closeMatch = true; state.close.set(r.url, r);
+    }
     for (const raw of j.results || []) {
       const r = normalize(raw, p); if (!r) continue;
+      state.close.delete(r.url);
       const prev = state.results.get(r.url);
       if (prev) {
         for (const s2 of r.sources) { const o = prev.sources.find(x => x.engine === s2.engine); if (!o) prev.sources.push(s2); else if (s2.pos != null && (o.pos == null || s2.pos < o.pos)) o.pos = s2.pos; }
@@ -779,7 +784,16 @@ function render(reset, err) {
   list.slice(rendered, state.visibleLimit).forEach((r, i) => frag.appendChild(state.cat === "timesearch" ? timeCard(r) : card(r, i, r.b >= bThreshold && r.m.exact && r.engines.length <= 2)));
   box.appendChild(frag); rendered = Math.min(list.length, state.visibleLimit); paintDigMore();
   paintDiscovered(box);
-  if (!list.length) box.insertAdjacentHTML("beforeend", err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No exact matches on these pages. Try Load more, refine your words, or enable more sources. Loose matches only appear under More like this.</div>`);
+  const close = state.cat === "timesearch" ? [] : [...state.close.values()].filter(r => !state.results.has(r.url) && (!state.hideSeen || !seen.has(r.url)));
+  if (!list.length && !close.length) box.insertAdjacentHTML("beforeend", err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No exact matches on these pages. Try Load more, refine your words, or enable more sources. Loose matches only appear under More like this.</div>`);
+  // Close matches: only when the exact list is short, after every exact result, clearly separated
+  box.querySelectorAll(".close-head,.card.close").forEach(el => el.remove());
+  if (close.length && list.length < 30 && rendered >= list.length) {
+    box.insertAdjacentHTML("beforeend", `<div class="close-head"><h2>Close matches</h2><small>${list.length ? "Only " + list.length + " exact match" + (list.length === 1 ? "" : "es") + ". " : "No exact matches. "}These are missing some of your words.</small></div>`);
+    const cf = document.createDocumentFragment();
+    close.sort((a, b) => (b.m.strength || 0) - (a.m.strength || 0)).slice(0, 60).forEach((r, i) => { const el = card(r, i, false); el.classList.add("close"); cf.appendChild(el); });
+    box.appendChild(cf);
+  }
   if (state.catMismatch && reset !== "x") box.insertAdjacentHTML("afterbegin", `<div class="notice">The server doesn't serve the ${esc(state.cat)} category yet, so it returned ${esc(state.catMismatch)} results instead.</div>`);
   status(list.length, err);
   if (!state.hasMore && list.length && rendered >= list.length) box.insertAdjacentHTML("beforeend", `<div class="floor">— OCEAN FLOOR · ${list.length} RESULTS —</div>`);
@@ -794,6 +808,7 @@ function card(r, i, buried) {
   const tags = [
     r.dug ? `<span class="meta-tag dug" title="Found by DeepSearch's own live crawl">Found by DeepSearch · Dug live${r.discovered ? " · new source" : ""}</span>` : "",
     r.m.exact ? '<span class="meta-tag ex">exact</span>' : "",
+    r.closeMatch ? `<span class="meta-tag" title="Missing: ${esc(((r.match && r.match.missing) || []).join(", "))}">close match</span>` : "",
     buried ? '<span class="meta-tag bur">buried</span>' : "",
     r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : "",
     state.knownSnap && state.knownSnap.size && !state.knownSnap.has(r.url) ? '<span class="meta-tag new-t">new</span>' : "",
@@ -886,9 +901,28 @@ function setImg(img, u, fallback) {
   if (!img.isConnected) return;
   img.src = u;
 }
+/** Saved settings that shrink results; shown so a leftover toggle never silently starves a search. */
+function activeFilters() {
+  const f = [];
+  if (state.phrase) f.push("Exact phrase"); if (state.pin) f.push("Pinpoint"); if (state.near >= 2) f.push("Within " + state.near + " words");
+  if (excludeList().length) f.push("Always exclude: " + excludeList().slice(0, 3).join(", ") + (excludeList().length > 3 ? "…" : ""));
+  if (state.hideSeen) f.push("Hide seen"); if (state.minm) f.push("Min match " + state.minm + "%"); if (state.dedupe) f.push("One per domain");
+  if (state.time) f.push("Past " + state.time + (state.dated ? " (dated only)" : "")); if (state.facets.size) f.push(state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : ""));
+  if (state.activeChips.length) f.push("site: " + state.activeChips.join(", "));
+  if (state.off.has("Dig")) f.push("Dig off");
+  const off = searchEngines ? searchEngines().filter(e => state.off.has(e)).length : 0; if (off) f.push(off + " engine" + (off > 1 ? "s" : "") + " off");
+  return f;
+}
+function resetFilters() {
+  for (const [k, v] of [["phrase", false], ["pin", false], ["near", 0], ["exclude", ""], ["hideSeen", false], ["minm", 0], ["dedupe", false], ["time", ""], ["dated", false], ["enginesOff", []], ["langx", false], ["dupes", false]]) LS.set(k, v);
+  const u = new URL(location.href); u.hash = "q=" + encodeURIComponent(qi.value.trim()); location.replace(u.href); location.reload();
+}
+$("#status").addEventListener("click", e => { if (e.target.closest("#resetFilters")) resetFilters(); });
 function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
+  const af = state.cat === "timesearch" ? [] : activeFilters();
+  if (state.q && af.length) parts.push(`<span class="warn filters-on">Filters on: ${af.map(esc).join(" · ")} <button type="button" id="resetFilters" class="chip">Reset filters</button></span>`);
   if (state.q && state.cat === "timesearch") {
     parts.push(`<span><b>${n}</b> archived page${n === 1 ? "" : "s"}${n > rendered ? ` · showing ${rendered}` : ""} · era ${state.era[0]}–${state.era[1] >= NOW_Y ? "now" : state.era[1]} · ${esc($("#timeSort").selectedOptions[0]?.textContent || state.timeSort)}${state.deadOnly ? " · dead sites only" : ""}${state.timeType !== "any" ? " · " + esc(state.timeType) : ""}</span>`);
     if (state.dropped) { const d = Object.entries(state.dropped).filter(([, v]) => v).map(([k, v]) => `${esc(k)} ${v}`); if (d.length) parts.push(`<span>filtered out: ${d.join(" · ")}</span>`); }
