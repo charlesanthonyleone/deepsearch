@@ -48,6 +48,9 @@ const state = {
   q: "", seq: 0, nextPage: 1, hasMore: false, loading: false,
   results: new Map(), order: 0, unresponsive: new Map(), counts: {}, safeIgnored: false
 };
+const NOW_Y = new Date().getFullYear();
+state.era = LS.get("era", [1990, NOW_Y]); state.deadOnly = LS.get("deadOnly", false); state.timeSort = LS.get("timeSort", "leasttouched"); state.timeType = LS.get("timeType", "any");
+state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = "";
 const isGateway = () => /\/api\/search\/?$/.test(state.apiPath);
 
 /* ---------------- abyss canvas ---------------- */
@@ -629,10 +632,11 @@ function requestSearch(keepFacets, immediate) {
   searchTimer = setTimeout(() => { searchTimer = null; runSearch(keepFacets); }, 400);
 }
 async function runSearch(keepFacets) {
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
   const q = fullQuery();
   if (!q) return;
   if (state.activeSaved && savedKey(state.activeSaved.q, state.activeSaved.cat) !== savedKey(qi.value, state.cat)) { state.activeSaved = null; state.knownSnap = null; }
-  state.visibleLimit = BATCH; state.suggestedSources = []; paintSuggestedSources(); releaseThumbs();
+  state.visibleLimit = BATCH; state.suggestedSources = []; state.discovered = []; state.digStatus = ""; paintSuggestedSources(); releaseThumbs();
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
   state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null; state.dedupeInfo = null;
   if (ctrl) ctrl.abort();
@@ -883,8 +887,11 @@ function setImg(img, u, fallback) {
 function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
-  if (state.q) {
-    parts.push(`<span><b>${n}</b> results · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.pin ? " · pinpoint" : ""}${state.near >= 2 ? " · within " + state.near + " words" : ""}${state.langx ? " · 7 languages" : ""}${state.strict ? " · strict" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
+  if (state.q && state.cat === "timesearch") {
+    parts.push(`<span><b>${n}</b> archived page${n === 1 ? "" : "s"}${n > rendered ? ` · showing ${rendered}` : ""} · era ${state.era[0]}–${state.era[1] >= NOW_Y ? "now" : state.era[1]} · ${esc($("#timeSort").selectedOptions[0]?.textContent || state.timeSort)}${state.deadOnly ? " · dead sites only" : ""}${state.timeType !== "any" ? " · " + esc(state.timeType) : ""}</span>`);
+    if (state.dropped) { const d = Object.entries(state.dropped).filter(([, v]) => v).map(([k, v]) => `${esc(k)} ${v}`); if (d.length) parts.push(`<span>filtered out: ${d.join(" · ")}</span>`); }
+  } else if (state.q) {
+    parts.push(`<span><b>${n}</b> exact results${n > rendered ? ` · showing ${rendered}` : ""} · ${state.nextPage - 1} page${state.nextPage > 2 ? "s" : ""} deep · ${esc(KIND[state.cat])} · sorted by ${state.sort}${state.phrase ? " · exact phrase" : ""}${state.pin ? " · pinpoint" : ""}${state.near >= 2 ? " · within " + state.near + " words" : ""}${state.langx ? " · 7 languages" : ""}${state.time ? " · past " + esc(state.time) + (state.dated ? " (dated only)" : "") : ""}${state.minm ? " · ≥" + state.minm + "% match" : ""}${state.dedupe ? " · one per domain" : ""}${state.facets.size ? " · " + state.facets.size + " domain filter" + (state.facets.size > 1 ? "s" : "") : ""}</span>`);
     const counts = Object.entries(state.counts).filter(([, v]) => v).map(([k, v]) => `${esc(engName(k))} ${v}`);
     if (counts.length) parts.push(`<span>answered: ${counts.join(" · ")}</span>`);
     if (state.hideSeen) { const h = [...state.results.keys()].filter(u => seen.has(u)).length; if (h) parts.push(`<span>${h} seen hidden</span>`); }
@@ -1117,7 +1124,6 @@ addEventListener("keydown", e => {
 
 
 /* -------- Dig: live own-source crawl, dig list, suggested + discovered sources -------- */
-state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = "";
 const digBase = () => state.apiBase;
 async function runDig(seq) {
   if (!isGateway() || !state.token || state.off.has("Dig")) return;
@@ -1166,13 +1172,14 @@ function paintSuggestedSources() {
   const have = new Set(state.digSites.map(s => s.site));
   const list = state.suggestedSources.filter(s => !have.has(s.site || hostOf(s.url))).slice(0, 16);
   box.hidden = state.cat === "timesearch" || (!list.length && !state.digStatus);
-  box.innerHTML = `<span class="lbl">Suggested new sources</span><span class="dig-state">${esc(state.digStatus || "")}</span>`;
+  box.innerHTML = `<div class="ss-head"><span class="lbl">Suggested new sources</span><span class="dig-state">${esc(state.digStatus || "")}</span></div><div class="ss-row"></div>`;
+  const row = box.querySelector(".ss-row");
   for (const s of list) {
     const b = document.createElement("button"); b.type = "button"; b.className = "chip src-chip";
     b.title = `Add to dig list${s.from && s.from.length ? " · linked from " + s.from.join(", ") : ""}`;
     b.innerHTML = `<span></span><b>+</b>`; b.firstChild.textContent = s.site || hostOf(s.url);
     b.onclick = () => addDigSite(s.url || s.site, b);
-    box.appendChild(b);
+    row.appendChild(b);
   }
 }
 function paintDiscovered(box) {
@@ -1251,7 +1258,7 @@ function saveResult(r, btn) {
 setTimeout(loadDigSites, 900);
 
 /* -------- similar keyword chips -------- */
-const STOP = new Set("the a an and or of to in on for with by at from is are was be this that it its as your you my me we our new hd video videos free full porn xxx com www http https html php watch part".split(" "));
+const STOP = new Set("the a an and or of to in on for with by at from is are was be this that it its as your you my me we our new hd video videos free full porn xxx com www http https html php watch part rsquo lsquo rdquo ldquo quot amp nbsp mdash ndash hellip apos".split(" "));
 function paintSimilarKeywords(r, extra) {
   const box = $("#similarKeywords"); if (!box) return;
   const qw = new Set(parseQuery(state.q || "").terms);
@@ -1271,8 +1278,6 @@ function paintSimilarKeywords(r, extra) {
 }
 
 /* -------- Timesearch -------- */
-const NOW_Y = new Date().getFullYear();
-state.era = LS.get("era", [1990, NOW_Y]); state.deadOnly = LS.get("deadOnly", false); state.timeSort = LS.get("timeSort", "leasttouched"); state.timeType = LS.get("timeType", "any");
 function timesearchUrl(q, page) {
   const p = new URLSearchParams({ q: state.phrase && !/"/.test(q) ? `"${q}"` : q, page: String(page), sort: state.timeSort, type: state.timeType });
   if (state.era[0] > 1990) p.set("from", String(state.era[0]));
