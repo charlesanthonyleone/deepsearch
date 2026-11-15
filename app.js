@@ -648,6 +648,7 @@ async function runSearch(keepFacets) {
   $("#status").innerHTML = "<span>sounding…</span>";
   const r = qi.getBoundingClientRect(); ping(r.left + 20, r.top + r.height / 2, true);
   const seq0 = state.seq;
+  state.deep = null; runDeep(seq0);   // deep site crawl runs server-side in the background; results stream in
   await loadMore(true);
   if (state.cat !== "timesearch" && seq0 === state.seq) runDig(seq0);   // starts from page 1's own hosts
 }
@@ -922,6 +923,7 @@ function status(n, err) {
   const parts = [];
   if (err) parts.push(`<span class="err">${esc(err.message)}</span>`);
   const af = state.cat === "timesearch" ? [] : activeFilters();
+  if (state.q && state.deep && state.cat !== "timesearch") parts.push(deepLine());
   if (state.q && af.length) parts.push(`<span class="warn filters-on">Filters on: ${af.map(esc).join(" · ")} <button type="button" id="resetFilters" class="chip">Reset filters</button></span>`);
   if (state.q && state.cat === "timesearch") {
     parts.push(`<span><b>${n}</b> archived page${n === 1 ? "" : "s"}${n > rendered ? ` · showing ${rendered}` : ""} · era ${state.era[0]}–${state.era[1] >= NOW_Y ? "now" : state.era[1]} · ${esc($("#timeSort").selectedOptions[0]?.textContent || state.timeSort)}${state.deadOnly ? " · dead sites only" : ""}${state.timeType !== "any" ? " · " + esc(state.timeType) : ""}</span>`);
@@ -1160,6 +1162,47 @@ addEventListener("keydown", e => {
 
 /* -------- Dig: live own-source crawl, dig list, suggested + discovered sources -------- */
 const digBase = () => state.apiBase;
+/* ---------------- deep site crawl: page through each video site's own search, stream title matches ---------------- */
+const DEEP_CLIENT_CAP = 10000;
+async function runDeep(seq) {
+  if (!isGateway() || !state.token || (state.cat !== "videos" && state.cat !== "images")) return;
+  const p = new URLSearchParams({ q: state.q, categories: KIND[state.cat] });
+  if (state.phrase) p.set("phrase", "1");
+  let j;
+  try { j = await apiFetch(digBase() + "/api/deep?" + p); } catch (e) { if (seq === state.seq) { state.deep = { error: e.message }; status(sortedCount()); } return; }
+  if (seq !== state.seq) return;
+  state.deep = { id: j.id, next: 0, total: j.total, done: false, sites: j.sites || {}, added: 0 };
+  const pq = parseQuery(state.q);
+  let k = 0;
+  for (;;) {
+    let r;
+    try { r = await apiFetch(digBase() + "/api/deep/poll?" + new URLSearchParams({ id: state.deep.id, from: String(state.deep.next), limit: "500" })); }
+    catch (e) { if (seq === state.seq) state.deep.error = e.message; break; }
+    if (seq !== state.seq) return;
+    let got = 0;
+    for (const raw of r.results || []) {
+      if (state.results.size >= DEEP_CLIENT_CAP) break;
+      const x = normalize(raw, 1); if (!x || state.results.has(x.url)) continue;
+      if (state.cat === "images" && x.kind !== "image") continue;
+      if (state.cat === "videos" && x.kind !== "video") continue;
+      x.idx = 1e6 + (k++); x.deep = true; x.m = matchInfo(x, pq); x.m.exact = true;   // server keeps exact title matches only
+      state.close.delete(x.url); state.results.set(x.url, x); got++;
+    }
+    Object.assign(state.deep, { next: r.next, total: r.total, done: r.done, sites: r.sites || {} }); state.deep.added += got;
+    if (got) { if (!state.loading && rendered < state.visibleLimit) render(false); else { paintDigMore(); status(sortedCount()); } }
+    else status(sortedCount());
+    if (r.done && r.next >= r.total) break;
+    if (state.results.size >= DEEP_CLIENT_CAP) break;
+    if (r.next >= r.total) await sleep(3000);   // caught up: wait for the crawl
+  }
+  if (seq === state.seq) { state.deep.done = true; status(sortedCount()); paintDigMore(); }
+}
+function deepLine() {
+  const d = state.deep; if (!d) return "";
+  if (d.error) return `<span class="err">deep crawl: ${esc(d.error)}</span>`;
+  const sites = Object.entries(d.sites || {}), pages = sites.reduce((a, [, v]) => a + (v.pages || 0), 0);
+  return `<span>deep crawl${d.done ? "" : " running…"}: <b>${d.added}</b> title matches · ${pages} pages across ${sites.length} sites' own search</span>`;
+}
 async function runDig(seq) {
   if (!isGateway() || !state.token || state.off.has("Dig")) return;
   state.digStatus = "digging…"; paintSuggestedSources();
