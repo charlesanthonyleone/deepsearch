@@ -973,8 +973,10 @@ async function loadSimilar(r, page, append) {
       have.add(s.url);
       grid.appendChild(similarCard(s));
     }
-    $("#similarStatus").textContent = grid.children.length ? "" : "No similar results right now.";
     viewer.similarPage = page;
+    // a page that was all repeats: quietly pull the next one (up to 3 pages deep) instead of showing "none"
+    if (grid.children.length < 6 && data.hasMore && page < 3 && viewer.similarFor === r.url) return loadSimilar(r, page + 1, true);
+    $("#similarStatus").textContent = grid.children.length ? "" : "No similar results right now.";
     $("#similarMore").hidden = !data.hasMore;
   } catch (e) {
     if (e.name === "AbortError") return;
