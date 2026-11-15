@@ -575,7 +575,7 @@ function normalize(raw, apiPage) {
   const engines = [...new Set((raw.engines && raw.engines.length ? raw.engines : sources.map(s => s.engine)).filter(Boolean))];
   for (const e of engines) if (!sources.find(s => s.engine === e)) sources.push({ engine: e, pos: null });
   return {
-    url, title: String(raw.title || url), content: String(raw.content || ""),
+    url, title: String(raw.title || url).replace(/<\/?(em|b|strong|i|mark|span)\b[^>]*>/gi, ""), content: String(raw.content || "").replace(/<\/?(em|b|strong|i|mark|span)\b[^>]*>/gi, ""),
     dug: !!(raw.dug || raw.dugLive || raw.dig || (raw.engines || []).some(isDigEng)), discovered: !!(raw.dig && raw.dig.discovered), archive: raw.archive || null, rawTime: raw,
     host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
     proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
