@@ -23,7 +23,8 @@ const hue = s => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charC
 const baseOf = id => String(id).split(/[ .]/)[0];
 const engColor = id => (ENG[id] && ENG[id].c) || (ENG[baseOf(id)] && ENG[baseOf(id)].c) || `hsl(${hue(baseOf(id))},70%,62%)`;
 const engName = id => (ENG[id] && ENG[id].name) || String(id).replace(/(^|[ .])([a-z])/g, (m, p, c) => (p === "." ? " " : p) + c.toUpperCase());
-const KIND = { general: "web", images: "images", videos: "videos" };
+const KIND = { general: "web", images: "images", videos: "videos", timesearch: "timesearch" };
+const BATCH = 40;
 const DEFAULT_CHIPS = ["reddit.com", "archive.org", "github.com", "wikipedia.org", "news.ycombinator.com", "stackexchange.com"];
 
 const state = {
@@ -36,13 +37,14 @@ const state = {
   dedupe: LS.get("dedupe", false),
   views: LS.get("views", { general: "list", images: "grid", videos: "grid" }), thumbProxy: CFG.thumbProxy === undefined ? "auto" : CFG.thumbProxy,
   hideSeen: LS.get("hideSeen", false), pin: LS.get("pin", false), near: LS.get("near", 0), langx: LS.get("langx", false), dupes: LS.get("dupes", false), dedupeInfo: null, exclude: LS.get("exclude", ""), saved: LS.get("saved", []), activeSaved: null, knownSnap: null,
-  cat: LS.get("cat", "general"), phrase: LS.get("phrase", false), dated: LS.get("dated", false), time: LS.get("time", ""), strict: LS.get("strict", false), minm: LS.get("minm", 0), facets: new Set(),
+  cat: LS.get("cat", "general"), phrase: LS.get("phrase", false), dated: LS.get("dated", false), time: LS.get("time", ""), strict: true, minm: LS.get("minm", 0), facets: new Set(),
   chips: LS.get("chips", DEFAULT_CHIPS),
   activeChips: [],
   apiBase: LS.get("apiBase", CFG.apiBase || ""),
   apiPath: LS.get("apiPath", CFG.searchPath || "/api/search"),
   token: (LS.get("token", "") || "").trim(),
   // per search
+  visibleLimit: BATCH, suggestedSources: [], timeType: "any",
   q: "", seq: 0, nextPage: 1, hasMore: false, loading: false,
   results: new Map(), order: 0, unresponsive: new Map(), counts: {}, safeIgnored: false
 };
@@ -133,7 +135,9 @@ addEventListener("scroll", () => requestAnimationFrame(setDepth), { passive: tru
 
 /* ---------------- controls ---------------- */
 const kindEngines = () => state.catalog[KIND[state.cat]] || [];
+const isDigEng = e => String(e).toLowerCase() === "dig";
 const enabledEngines = () => kindEngines().filter(e => !state.off.has(e));
+const searchEngines = () => kindEngines().filter(e => !isDigEng(e));
 function renderEngines() {
   const box = $("#engines"); box.innerHTML = "";
   const list = kindEngines(); box.hidden = !list.length;
@@ -182,9 +186,9 @@ function paintDig() {
 dig.addEventListener("input", () => { state.dig = +dig.value; LS.set("dig", state.dig); paintDig(); });
 dig.addEventListener("change", () => { if (state.q) requestSearch(); });
 paintDig();
-const curView = () => state.views[state.cat] || (state.cat === "general" ? "list" : "grid");
+const curView = () => state.cat === "timesearch" ? "list" : state.views[state.cat] || (state.cat === "general" ? "list" : "grid");
 let paintView = () => {};
-seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); if (state.q) requestSearch(); });
+seg("#cat", state.cat, v => { state.cat = v; LS.set("cat", v); renderEngines(); paintView(curView()); paintTimeTab(); if (state.q) requestSearch(); });
 (() => { const g = $("#view"); paintView = v => g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === v)); })();
 seg("#view", curView(), v => { state.views[state.cat] = v; LS.set("views", state.views); render(true); });
 const datedWrap = $("#datedWrap"), datedCb = $("#dated");
@@ -254,6 +258,10 @@ function markSeen(url) { if (seen.has(url)) return; seen.add(url); const arr = [
 const hs = $("#hideSeen"); hs.checked = state.hideSeen;
 hs.addEventListener("change", () => { state.hideSeen = hs.checked; LS.set("hideSeen", hs.checked); render(true); });
 $("#results").addEventListener("click", e => {
+  const save = e.target.closest(".save-result");
+  if (save) { e.preventDefault(); e.stopPropagation(); saveResult(state.results.get(save.closest(".card").dataset.url), save); return; }
+  const disc = e.target.closest("[data-dig-add]");
+  if (disc) { e.preventDefault(); addDigSite(disc.dataset.digAdd, disc); return; }
   const copy = e.target.closest(".copy-link");
   if (copy) { e.preventDefault(); e.stopPropagation(); copyLink(copy.closest(".card").dataset.url, copy); return; }
   const d = e.target.closest(".dismiss");
@@ -424,8 +432,8 @@ const drawer = $("#drawer"), scrim = $("#scrim");
 function openDrawer(o) { drawer.classList.toggle("open", o); drawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) { $("#apiBase").value = state.apiBase; $("#apiPath").value = state.apiPath; $("#token").value = state.token; $("#alwaysExclude").value = state.exclude; $("#settingsNote").textContent = ""; } }
 $("#openSettings").onclick = () => openDrawer(true);
 $("#closeSettings").onclick = () => openDrawer(false);
-scrim.onclick = () => { openDrawer(false); openSavedDrawer(false); };
-addEventListener("keydown", e => { if (e.key === "Escape") { openDrawer(false); openSavedDrawer(false); } });
+scrim.onclick = () => { openDrawer(false); openSavedDrawer(false); openDigDrawer(false); };
+addEventListener("keydown", e => { if (e.key === "Escape") { openDrawer(false); openSavedDrawer(false); openDigDrawer(false); } });
 function saveSettings() {
   state.apiBase = $("#apiBase").value.trim().replace(/\/+$/, "");
   state.apiPath = ("/" + ($("#apiPath").value.trim() || "/api/search").replace(/^\/+/, ""));
@@ -476,14 +484,15 @@ function fullQuery() {
 
 /* ---------------- API ---------------- */
 function buildUrl(q, page) {
+  if (state.cat === "timesearch") return timesearchUrl(q, page);
   const p = new URLSearchParams();
   p.set("q", q);
   if (isGateway()) {
-    const en = enabledEngines();
-    if (en.length && en.length < kindEngines().length) p.set("engines", en.join(","));
+    const en = enabledEngines().filter(e => !isDigEng(e));
+    if (en.length && en.length < searchEngines().length) p.set("engines", en.join(","));
     p.set("categories", KIND[state.cat]);
     if (state.time) { p.set("time", state.time); if (state.dated) p.set("dated", "1"); }
-    if (state.strict) p.set("strict", "1");
+    p.set("strict", "1");
     if (state.phrase) p.set("phrase", "1");
     if (state.pin) p.set("pin", "1");
     if (state.near >= 2) p.set("near", String(state.near));
@@ -512,7 +521,7 @@ function mergeSignals(a, b) {
   if (a.aborted || b.aborted) c.abort();
   return c.signal;
 }
-async function apiFetch(url, signal) {
+async function apiFetch(url, signal, method = "GET") {
   if (!state.apiBase) throw new Error("Set the API base in settings ⚙");
   const headers = { Accept: "application/json" };
   if (state.token) headers.Authorization = "Bearer " + state.token;
@@ -521,7 +530,7 @@ async function apiFetch(url, signal) {
     const timeout = (typeof AbortSignal.timeout === "function") ? AbortSignal.timeout(90000) : null;
     const sig = timeout ? mergeSignals(signal, timeout) : signal;
     let r;
-    try { r = await fetch(url, { headers, signal: sig, referrerPolicy: "no-referrer", credentials: "omit", cache: "no-store" }); }
+    try { r = await fetch(url, { method, headers, signal: sig, referrerPolicy: "no-referrer", credentials: "omit", cache: "no-store" }); }
     catch (e) {
       if (e.name === "AbortError" && signal && signal.aborted) throw e;
       last = new Error("Can't reach the uplink. Check the API base, or this origin isn't allowed by the server's CORS.");
@@ -530,7 +539,9 @@ async function apiFetch(url, signal) {
     }
     if (r.status === 401) throw new Error("Token rejected. Open settings ⚙ and paste your access token.");
     if (r.status === 429) throw new Error(`Rate limited. Try again in ${r.headers.get("Retry-After") || "a few"}s.`);
-    if (r.status === 403) throw new Error("Forbidden by the server (origin not allowed).");
+    if (r.status === 403) throw new Error(/\/api\/dig\/sites/.test(url) ? "That site is blocked from the dig list." : "Forbidden by the server (origin not allowed).");
+    if (r.status === 409) throw new Error("Dig list is full.");
+    if (r.status === 400 && /\/api\/dig\/sites/.test(url)) throw new Error("That doesn't look like a valid site.");
     if (r.status === 502 || r.status === 504) {
       last = new Error(r.status === 504 ? "Search timed out. Try again in a moment." : "Search backend was busy. Try again in a moment.");
       if (attempt === 0) { await sleep(1000); continue; }
@@ -547,7 +558,7 @@ const EMBED_ORIGINS = new Set(["https://www.pornhub.com","https://www.xvideos.co
 function safeEmbed(u) { try { const x = new URL(u); return x.protocol === "https:" && EMBED_ORIGINS.has(x.origin) ? x.href : ""; } catch { return ""; } }
 // Normalize either backend's result into one shape.
 function normalize(raw, apiPage) {
-  const url = safeUrl(raw.url); if (!url) return null;
+  const url = safeUrl(raw.url || raw.originalUrl || raw.original); if (!url) return null;
   const P = CFG.pageSize || 10;
   let sources = [];
   if (Array.isArray(raw.sources)) {
@@ -561,10 +572,11 @@ function normalize(raw, apiPage) {
   for (const e of engines) if (!sources.find(s => s.engine === e)) sources.push({ engine: e, pos: null });
   return {
     url, title: String(raw.title || url), content: String(raw.content || ""),
+    dug: !!(raw.dug || raw.dugLive || raw.dig || (raw.engines || []).some(isDigEng)), discovered: !!(raw.dig && raw.dig.discovered), archive: raw.archive || null, rawTime: raw,
     host: raw.host || hostOf(url), domain: raw.domain || "", engines, sources,
     proxy: raw.thumbProxy && /^\/api\/thumb\?/.test(raw.thumbProxy) ? state.apiBase + raw.thumbProxy : "",
     imgProxy: raw.imageProxy && /^\/api\/thumb\?/.test(raw.imageProxy) ? state.apiBase + raw.imageProxy : "",
-    embed: safeEmbed(raw.embed),
+    embed: safeEmbed(raw.embed) || safeEmbed(raw.media && Array.isArray(raw.media.embeds) ? raw.media.embeds[0] : ""),
     resolution: raw.resolution || null, date: raw.publishedDate ? Date.parse(raw.publishedDate) || null : null,
     dupes: 0, dupList: Array.isArray(raw.duplicates) ? raw.duplicates.filter(d => d && d.url) : [],
     views: typeof raw.views === "number" ? raw.views : null, rarity: typeof raw.rarity === "number" ? raw.rarity : null,
@@ -620,6 +632,7 @@ async function runSearch(keepFacets) {
   const q = fullQuery();
   if (!q) return;
   if (state.activeSaved && savedKey(state.activeSaved.q, state.activeSaved.cat) !== savedKey(qi.value, state.cat)) { state.activeSaved = null; state.knownSnap = null; }
+  state.visibleLimit = BATCH; state.suggestedSources = []; paintSuggestedSources(); releaseThumbs();
   state.q = q; state.seq++; state.nextPage = 1; state.hasMore = true; state.results = new Map(); state.order = 0;
   state.unresponsive = new Map(); state.counts = {}; state.safeIgnored = false; if (keepFacets !== true) { state.facets = new Set(); state.facetList = []; } state.catMismatch = null; state.dropped = null; state.dedupeInfo = null;
   if (ctrl) ctrl.abort();
@@ -629,11 +642,14 @@ async function runSearch(keepFacets) {
   $("#results").innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   $("#status").innerHTML = "<span>sounding…</span>";
   const r = qi.getBoundingClientRect(); ping(r.left + 20, r.top + r.height / 2, true);
+  const seq0 = state.seq;
   await loadMore(true);
+  if (state.cat !== "timesearch" && seq0 === state.seq) runDig(seq0);   // starts from page 1's own hosts
 }
 const AUTO_PAGES = 3;   // infinite scroll stops after this many automatic steps until "Dig deeper" is tapped
 async function loadMore(first, manual) {
   if (state.loading || !state.hasMore || !state.q) return;
+  if (!first && !manual && state.cat !== "general") return;
   if (!first && !manual && state.autoPages >= AUTO_PAGES) { state.paused = true; paintDigMore(); return; }
   if (!first) { if (manual) state.autoPages = 0; else state.autoPages++; }
   state.paused = false; paintDigMore();
@@ -641,7 +657,7 @@ async function loadMore(first, manual) {
   const seq = state.seq, my = new AbortController(); ctrl = my;
   // Deep Dig: each step pulls `dig` upstream pages per engine, fetched one page at a time.
   const pages = [];
-  if (isGateway() && state.dig >= 5) pages.push(state.nextPage);
+  if (state.cat === "timesearch" || (isGateway() && state.dig >= 5)) pages.push(state.nextPage);
   else for (let i = 0; i < state.dig && state.nextPage + i <= 20; i++) pages.push(state.nextPage + i);
   let err = null, anyMore = false, got = 0;
   const settled = [];
@@ -655,8 +671,9 @@ async function loadMore(first, manual) {
   for (const s of settled) {
     if (s.status === "rejected") { if (s.reason && s.reason.name !== "AbortError") err = s.reason; continue; }
     const { j, p } = s.value;
+    mergeSuggestedSources(j);
     if (!isGateway() && state.cat !== "general" && j.category && j.category !== state.cat) state.catMismatch = j.category;
-    if (isGateway() && Array.isArray(j.categories) && !j.categories.includes(KIND[state.cat])) state.catMismatch = j.categories.join(",");
+    if (state.cat !== "timesearch" && isGateway() && Array.isArray(j.categories) && !j.categories.includes(KIND[state.cat])) state.catMismatch = j.categories.join(",");
     if (j.facets && Array.isArray(j.facets.domains) && !state.facets.size) mergeFacets(j.facets.domains);
     if (j.dedupe && typeof j.dedupe === "object") { state.dedupeInfo = state.dedupeInfo || { hashed: 0, collapsed: 0 }; state.dedupeInfo.hashed += +j.dedupe.hashed || 0; state.dedupeInfo.collapsed += +j.dedupe.collapsed || 0; }
     if (j.dropped) { state.dropped = state.dropped || {}; for (const [k, v] of Object.entries(j.dropped)) state.dropped[k] = (state.dropped[k] || 0) + (+v || 0); }
@@ -677,7 +694,7 @@ async function loadMore(first, manual) {
     }
   }
   for (const r of state.results.values()) r.b = buriedScore(r);
-  state.nextPage += isGateway() && state.dig >= 5 ? 1 : pages.length;
+  state.nextPage += pages.length;
   state.hasMore = anyMore && state.nextPage <= 20 && !(err && !got);
   state.loading = false; document.body.classList.remove("busy"); $("#loader").hidden = true;
   if (ctrl === my) ctrl = null;
@@ -727,7 +744,7 @@ function renderFacets(list) {
 function sorted() {
   const gw = isGateway();
   const ph = state.phrase ? phraseOf(qi.value || state.q) : "";
-  let list = [...state.results.values()].filter(r => (gw || ((!state.strict || r.m.exact) && r.m.strength >= state.minm)) && (!ph || hasPhrase(r, ph)));
+  let list = [...state.results.values()].filter(r => (state.cat === "timesearch" || r.m.exact) && r.m.strength >= state.minm && (!ph || hasPhrase(r, ph)));
   renderFacets(list);
   if (state.facets.size && !gw) list = list.filter(r => state.facets.has(r.domain || r.host));
   if (state.hideSeen) list = list.filter(r => !seen.has(r.url));
@@ -751,15 +768,16 @@ function render(reset, err) {
   const list = sorted(), box = $("#results");
   box.className = "results" + (curView() === "grid" ? " grid" : "") + " cat-" + state.cat;
   const bThreshold = (() => { const bs = list.map(r => r.b).sort((a, b) => b - a); return bs[Math.floor(bs.length * 0.2)] || Infinity; })();
-  if (reset) { box.innerHTML = ""; rendered = 0; }
+  if (reset) { releaseThumbs(box); box.innerHTML = ""; rendered = 0; }
   else if (state.sort === "buried" || state.dedupe) { box.innerHTML = ""; rendered = 0; } // re-rank entire list
   const frag = document.createDocumentFragment();
-  list.slice(rendered).forEach((r, i) => frag.appendChild(card(r, i, r.b >= bThreshold && r.m.exact && r.engines.length <= 2)));
-  box.appendChild(frag); rendered = list.length;
-  if (!list.length) box.innerHTML = err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No results matched. Loosen a quote, drop a -exclude, lower Min match, turn off Strict, or switch on more engines.</div>`;
+  list.slice(rendered, state.visibleLimit).forEach((r, i) => frag.appendChild(state.cat === "timesearch" ? timeCard(r) : card(r, i, r.b >= bThreshold && r.m.exact && r.engines.length <= 2)));
+  box.appendChild(frag); rendered = Math.min(list.length, state.visibleLimit); paintDigMore();
+  paintDiscovered(box);
+  if (!list.length) box.insertAdjacentHTML("beforeend", err ? "" : `<div class="empty"><strong>Nothing down here.</strong>No exact matches on these pages. Try Load more, refine your words, or enable more sources. Loose matches only appear under More like this.</div>`);
   if (state.catMismatch && reset !== "x") box.insertAdjacentHTML("afterbegin", `<div class="notice">The server doesn't serve the ${esc(state.cat)} category yet, so it returned ${esc(state.catMismatch)} results instead.</div>`);
   status(list.length, err);
-  if (!state.hasMore && list.length) box.insertAdjacentHTML("beforeend", `<div class="floor">— OCEAN FLOOR · ${list.length} RESULTS —</div>`);
+  if (!state.hasMore && list.length && rendered >= list.length) box.insertAdjacentHTML("beforeend", `<div class="floor">— OCEAN FLOOR · ${list.length} RESULTS —</div>`);
 }
 function card(r, i, buried) {
   const el = document.createElement("article");
@@ -769,6 +787,7 @@ function card(r, i, buried) {
   const srcs = [...r.sources].sort((a, b) => (a.pos ?? 999) - (b.pos ?? 999));
   const badges = srcs.map(s => `<span class="badge" style="--c:${engColor(s.engine)}" title="${esc(engName(s.engine))}${s.pos ? " ranked #" + s.pos : ""}"><i></i>${esc(engName(s.engine))}${s.pos ? ` <b>#${s.pos}</b>` : ""}</span>`).join("");
   const tags = [
+    r.dug ? `<span class="meta-tag dug" title="Found by DeepSearch's own live crawl">Found by DeepSearch · Dug live${r.discovered ? " · new source" : ""}</span>` : "",
     r.m.exact ? '<span class="meta-tag ex">exact</span>' : "",
     buried ? '<span class="meta-tag bur">buried</span>' : "",
     r.more ? `<span class="meta-tag">+${r.more} more from ${esc(r.host)}</span>` : "",
@@ -786,7 +805,7 @@ function card(r, i, buried) {
   if (showMedia) el.classList.add("has-media");
   const media = showMedia ? `<a class="media${src ? "" : " failed"}" href="${esc(r.url)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer" tabindex="-1" aria-hidden="true">
       <span class="ph">${PH_SVG}<em>${src ? "" : r.kind === "video" ? "video" : r.kind === "image" ? "image" : esc(r.host)}</em></span>
-      ${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? direct : "")}">` : ""}
+      ${src ? `<img alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? direct : "")}">` : ""}
       ${r.resolution ? `<span class="res-tag">${esc(r.resolution)}</span>` : ""}
       ${r.kind === "video" ? `<span class="play">${PLAY_SVG}</span>` : ""}
       ${r.length ? `<span class="dur">${esc(r.length)}</span>` : ""}
@@ -799,6 +818,7 @@ function card(r, i, buried) {
     <p>${highlight(r.content, r.m.hits)}</p>
     <div class="badges">${badges}${tags}</div></div>
     <button type="button" class="copy-link" aria-label="Copy link" title="Copy link to paste into an incognito tab">Copy</button>
+    <button type="button" class="save-result" title="Save result and optionally add its site">☆ Save</button>
     <button type="button" class="dismiss" aria-label="Dismiss" title="Dismiss (mark as seen)">✕</button>`;
   const img = el.querySelector(".media img"); if (img) thumbIO.observe(img);
   return el;
@@ -808,13 +828,23 @@ const PLAY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15
 /* thumbnails: lazy. Signed /api/thumb proxy URL first (no hotlink, no referer), then the direct URL with no-referrer, then a placeholder */
 // The proxy allows 4 fetches in flight per client and answers 503 beyond that, so fetch through a 3-wide queue,
 // back off and retry on 503/429, and fall back to the direct URL for other failures.
-const thumbIO = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbIO.unobserve(e.target); queueThumb(e.target); } }, { rootMargin: "500px 0px" });
-const thumbQ = [], blobCache = new Map(); let thumbActive = 0;
+const thumbIO = new IntersectionObserver(es => { for (const e of es) {
+  const img = e.target;
+  if (e.isIntersecting) { img.dataset.near = "1"; if (!img.getAttribute("src") && !img.dataset.queued) queueThumb(img); }
+  else { delete img.dataset.near; releaseThumb(img); }
+} }, { rootMargin: "900px 0px" });
+function releaseThumb(img) {
+  img.onload = img.onerror = null; img.removeAttribute("src");
+  if (img.dataset.blob) { URL.revokeObjectURL(img.dataset.blob); delete img.dataset.blob; }
+  img.closest(".media")?.classList.remove("loaded");
+}
+function releaseThumbs(root = $("#results")) { root.querySelectorAll("img").forEach(img => { thumbIO.unobserve(img); releaseThumb(img); }); }
+const thumbQ = []; let thumbActive = 0;
 function queueThumb(img) {
   const src = img.dataset.src;
-  if (blobCache.has(src)) return setImg(img, blobCache.get(src), img.dataset.direct);
+  if (img.dataset.queued) return;
   if (!img.dataset.direct && !/\/api\/thumb\?/.test(src)) return setImg(img, src, "");
-  thumbQ.push(img); pumpThumbs();
+  img.dataset.queued = "1"; thumbQ.push(img); pumpThumbs();
 }
 function pumpThumbs() {
   for (let i = thumbQ.length - 1; i >= 0; i--) if (!thumbQ[i].isConnected) thumbQ.splice(i, 1);
@@ -822,7 +852,7 @@ function pumpThumbs() {
     // in-viewport thumbnails first, then the ones just below
     let k = thumbQ.findIndex(inView); if (k < 0) k = 0;
     const img = thumbQ.splice(k, 1)[0]; if (!img.isConnected) continue;
-    thumbActive++; fetchThumb(img).finally(() => { thumbActive--; pumpThumbs(); });
+    thumbActive++; fetchThumb(img).finally(() => { thumbActive--; delete img.dataset.queued; pumpThumbs(); });
   }
 }
 const inView = el => { if (!el.isConnected) return false; const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 0; };
@@ -833,7 +863,9 @@ async function fetchThumb(img) {
     let r;
     try { r = await fetch(src, { credentials: "omit", referrerPolicy: "no-referrer" }); } catch { break; }
     if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) {
-      const u = URL.createObjectURL(await r.blob()); blobCache.set(src, u); return setImg(img, u, img.dataset.direct);
+      const blob = await r.blob();
+      if (!img.isConnected || (img.closest("#results,#similarGrid") && !img.dataset.near)) return;
+      const u = URL.createObjectURL(blob); img.dataset.blob = u; return setImg(img, u, img.dataset.direct);
     }
     if (r.status === 503 || r.status === 429) { await sleep(600 * (attempt + 1) + Math.random() * 400); continue; }
     break;
@@ -845,6 +877,7 @@ function setImg(img, u, fallback) {
   if (!u) return thumbDone(img, false);
   img.onload = () => img.naturalWidth > 2 ? thumbDone(img, true) : setImg(img, fallback, "");
   img.onerror = () => setImg(img, fallback, "");
+  if (!img.isConnected) return;
   img.src = u;
 }
 function status(n, err) {
@@ -864,9 +897,19 @@ function status(n, err) {
 }
 
 /* infinite scroll */
-new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && state.q && !state.loading && state.hasMore) loadMore(false); }, { rootMargin: "600px 0px" }).observe($("#sentinel"));
-function paintDigMore() { const b = $("#digMore"); b.hidden = !(state.paused && state.hasMore && !state.loading); }
-$("#digMore").onclick = () => loadMore(false, true);
+new IntersectionObserver(es => { if (state.cat === "general" && es.some(e => e.isIntersecting) && state.q && !state.loading && state.hasMore) loadMore(false); }, { rootMargin: "600px 0px" }).observe($("#sentinel"));
+function paintDigMore() {
+  const b = $("#digMore"), buffered = sortedCount() > state.visibleLimit;
+  b.hidden = state.loading || !(buffered || state.hasMore) || (state.cat === "general" && !state.paused && !buffered);
+  b.disabled = state.loading;
+  b.querySelector("small").textContent = "Up to 40 more results · no media autoplay";
+}
+function sortedCount() { return [...state.results.values()].filter(r => (state.cat === "timesearch" || (r.m && r.m.exact)) && (!state.hideSeen || !seen.has(r.url))).length; }
+$("#digMore").onclick = async () => {
+  state.visibleLimit += BATCH;
+  if (sorted().length > rendered) render(false);
+  else await loadMore(false, true);
+};
 
 $("#searchForm").addEventListener("submit", e => { e.preventDefault(); ops.hidden = true; qb.hidden = true; qbBtn.setAttribute("aria-expanded", "false"); help.setAttribute("aria-expanded", "false"); qi.blur(); runSearch(); });
 addEventListener("click", e => { if (e.target.closest(".card,.badge,a,button,input")) return; ping(e.clientX, e.clientY, false); });
@@ -903,11 +946,12 @@ function showItem(r) {
   $("#viewerBack").hidden = viewer.stack.length < 2;
   $("#viewerTitle").textContent = r.title || r.host || "View";
   $("#viewerOpen").href = r.url;
+  $("#viewerDig").onclick = ev => addDigSite(r.url, ev.currentTarget);
   $("#viewerCopy").onclick = ev => { ev.preventDefault(); copyLink(r.url, ev.currentTarget); };
-  renderStage(r);
+  renderStage(r); paintSimilarKeywords(r);
   viewer.similarPage = 1;
   viewer.similarFor = r.url;
-  $("#similarGrid").innerHTML = "";
+  releaseThumbs($("#similarGrid")); $("#similarGrid").innerHTML = "";
   $("#similarMore").hidden = true;
   $("#similarStatus").textContent = "Finding more…";
   if (viewer.simAbort) viewer.simAbort.abort();
@@ -916,7 +960,7 @@ function showItem(r) {
 
 function renderStage(r) {
   const stage = $("#viewerStage");
-  stage.innerHTML = "";
+  releaseThumbs(stage); stage.innerHTML = "";
   const embed = safeEmbed(r.embed);
   if (embed) {
     const f = document.createElement("iframe");
@@ -949,7 +993,7 @@ function fallbackMedia(r, msg) {
   const wrap = document.createElement("div");
   wrap.className = "viewer-fallback";
   const src = r.proxy || r.thumb || r.img || "";
-  wrap.innerHTML = (src ? `<span class="media"><img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}"></span>` : "") + `<p>${esc(msg)}</p>`;
+  wrap.innerHTML = (src ? `<span class="media"><img alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}"></span>` : "") + `<p>${esc(msg)}</p>`;
   const img = wrap.querySelector("img"); if (img) queueThumb(img);
   return wrap;
 }
@@ -966,6 +1010,7 @@ async function loadSimilar(r, page, append) {
     const data = await apiFetch(state.apiBase + state.apiPath.replace(/\/search\/?$/, "/similar") + "?" + p, ac.signal);
     if (viewer.similarFor !== r.url) return;
     const rows = (data.results || []).map(x => normalize(x, page)).filter(Boolean);
+    if (page === 1) paintSimilarKeywords(r, [data.q || "", ...rows.slice(0, 16).map(x => x.title), ...rows.flatMap(x => x.tags || [])]);
     const grid = $("#similarGrid");
     if (!append) grid.innerHTML = "";
     const have = new Set([...grid.querySelectorAll("[data-url]")].map(el => el.dataset.url));
@@ -994,7 +1039,7 @@ function similarCard(r) {
   el.className = "similar-card";
   el.dataset.url = r.url;
   const src = r.proxy || r.thumb || r.img || "";
-  el.innerHTML = `<span class="media${src ? "" : " failed"}">${src ? `<img alt="" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}">` : ""}</span><span class="similar-cap"><b>${esc(r.title)}</b><i>${esc(r.host)}</i></span>`;
+  el.innerHTML = `<span class="media${src ? "" : " failed"}">${src ? `<img alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${esc(src)}" data-direct="${esc(r.proxy ? (r.thumb || r.img || "") : "")}">` : ""}</span><span class="similar-cap"><b>${esc(r.title)}</b><i>${esc(r.host)}</i></span>`;
   const img = el.querySelector("img"); if (img) thumbIO.observe(img);
   el.addEventListener("click", () => openViewer(r));
   return el;
@@ -1005,8 +1050,8 @@ function actuallyHideViewer() {
   viewer.stack = [];
   if (viewer.simAbort) viewer.simAbort.abort();
   $("#viewer").hidden = true;
-  $("#viewerStage").innerHTML = "";
-  $("#similarGrid").innerHTML = "";
+  releaseThumbs($("#viewerStage")); $("#viewerStage").innerHTML = "";
+  releaseThumbs($("#similarGrid")); $("#similarGrid").innerHTML = "";
   document.body.classList.remove("viewer-open");
   document.body.style.top = "";
   window.scrollTo(0, viewer.scrollY || 0);
@@ -1070,4 +1115,209 @@ addEventListener("keydown", e => {
   });
 })();
 
+
+/* -------- Dig: live own-source crawl, dig list, suggested + discovered sources -------- */
+state.digSites = []; state.digMax = 200; state.discovered = []; state.digStatus = "";
+const digBase = () => state.apiBase;
+async function runDig(seq) {
+  if (!isGateway() || !state.token || state.off.has("Dig")) return;
+  state.digStatus = "digging…"; paintSuggestedSources();
+  const pq = parseQuery(state.q), p = new URLSearchParams({ q: state.q, categories: KIND[state.cat] });
+  if (state.phrase) p.set("phrase", "1"); if (state.pin) p.set("pin", "1");
+  const ex = excludeList(); if (ex.length) p.set("exclude", ex.join(","));
+  const all = [...state.results.values()];
+  const urls = all.slice(0, 20).map(r => r.url), hosts = [...new Set(all.map(r => r.host).filter(Boolean))].slice(0, 80);
+  if (urls.length) p.set("urls", urls.join(","));
+  if (hosts.length) p.set("hosts", hosts.join(","));
+  try {
+    const j = await apiFetch(digBase() + "/api/dig?" + p, ctrl ? undefined : undefined);
+    if (seq !== state.seq) return;
+    while (state.loading && seq === state.seq) await sleep(200);   // merge after page 1 settles
+    if (seq !== state.seq) return;
+    mergeSuggestedSources(j);
+    const disc = j.discoveredSites || j.discovered || [];
+    state.discovered = (Array.isArray(disc) ? disc : []).filter(d => d && (d.url || d.site)).slice(0, 12);
+    let got = 0, k = 0;
+    for (const raw of j.results || []) {
+      const r = normalize({ ...raw, dug: true }, 1); if (!r) continue;
+      if (state.cat === "images" && r.kind !== "image") continue;
+      if (state.cat === "videos" && r.kind !== "video") continue;
+      const prev = state.results.get(r.url);
+      if (prev) { prev.dug = true; continue; }
+      r.idx = (++k) * 4 - 0.5; r.m = matchInfo(r, pq);   // mixed into the first batch, every 4th slot
+      if (raw.match == null) r.m.exact = true;        // Dig results are strict server-side
+      state.results.set(r.url, r); got++;
+    }
+    if (j.engines) for (const [k, v] of Object.entries(j.engines)) state.counts[k] = (state.counts[k] || 0) + v;
+    const st = j.stats || {};
+    state.digStatus = `dug ${st.sites ?? "?"} sites live · ${got} new hits${st.ms ? " · " + Math.round(st.ms / 1000) + " s" : ""}`;
+    render(true);
+  } catch (e) {
+    if (seq === state.seq) state.digStatus = "dig failed: " + (e.message || "error");
+  }
+  if (seq === state.seq) paintSuggestedSources();
+}
+function mergeSuggestedSources(j) {
+  const list = j && Array.isArray(j.suggestions) ? j.suggestions.filter(x => x && typeof x === "object" && (x.url || x.site)) : [];
+  for (const s of list) if (!state.suggestedSources.find(x => (x.site || x.url) === (s.site || s.url))) state.suggestedSources.push(s);
+}
+function paintSuggestedSources() {
+  const box = $("#suggestedSources"); if (!box) return;
+  const have = new Set(state.digSites.map(s => s.site));
+  const list = state.suggestedSources.filter(s => !have.has(s.site || hostOf(s.url))).slice(0, 16);
+  box.hidden = state.cat === "timesearch" || (!list.length && !state.digStatus);
+  box.innerHTML = `<span class="lbl">Suggested new sources</span><span class="dig-state">${esc(state.digStatus || "")}</span>`;
+  for (const s of list) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip src-chip";
+    b.title = `Add to dig list${s.from && s.from.length ? " · linked from " + s.from.join(", ") : ""}`;
+    b.innerHTML = `<span></span><b>+</b>`; b.firstChild.textContent = s.site || hostOf(s.url);
+    b.onclick = () => addDigSite(s.url || s.site, b);
+    box.appendChild(b);
+  }
+}
+function paintDiscovered(box) {
+  if (state.cat === "timesearch" || !state.discovered.length) return;
+  const sec = document.createElement("section"); sec.className = "discovered";
+  sec.innerHTML = `<h2>Discovered sites <small>found by DeepSearch's live crawl, not by any engine</small></h2><div class="disc-grid"></div>`;
+  const g = sec.querySelector(".disc-grid"), have = new Set(state.digSites.map(s => s.site));
+  for (const d of state.discovered) {
+    const url = safeUrl(d.url || ("https://" + d.site + "/")); if (!url) continue;
+    const site = d.site || hostOf(url), el = document.createElement("article"); el.className = "disc-card";
+    el.innerHTML = `<span class="meta-tag dug">Found by DeepSearch</span><h3><a target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer"></a></h3><p></p><div class="disc-act"><button type="button" class="chip"></button></div>`;
+    const a = el.querySelector("a"); a.href = url; a.textContent = d.title || site;
+    el.querySelector("p").textContent = d.summary || d.description || "";
+    const stats = [d.matches ? d.matches + " matching page" + (d.matches > 1 ? "s" : "") : "", d.videos ? d.videos + " video" + (d.videos > 1 ? "s" : "") : "", d.images ? d.images + " image" + (d.images > 1 ? "s" : "") : "", d.hop != null ? "hop " + d.hop : "", d.from && d.from.length ? "via " + d.from.join(", ") : ""].filter(Boolean).join(" · ");
+    if (stats) el.querySelector("p").insertAdjacentHTML("afterend", `<div class="disc-stats">${esc(stats)}</div>`);
+    if (Array.isArray(d.top) && d.top.length) { const ul = document.createElement("ul"); ul.className = "disc-top"; for (const t of d.top.slice(0, 3)) { const tu = safeUrl(t.url); if (!tu) continue; const li = document.createElement("li"), ta = document.createElement("a"); ta.href = tu; ta.target = "_blank"; ta.rel = "noreferrer noopener"; ta.referrerPolicy = "no-referrer"; ta.textContent = (t.kind && t.kind !== "web" ? "▶ " : "") + (t.title || tu); li.append(ta); ul.append(li); } el.querySelector(".disc-act").before(ul); }
+    const host = document.createElement("div"); host.className = "disc-host"; host.textContent = site; el.querySelector("h3").after(host);
+    const b = el.querySelector("button"); b.dataset.digAdd = url; b.textContent = have.has(site) ? "On dig list" : "Add to dig list"; b.disabled = have.has(site);
+    g.appendChild(el);
+  }
+  box.prepend(sec);
+}
+async function loadDigSites() {
+  if (!isGateway() || !state.token) return;
+  try { const j = await apiFetch(digBase() + "/api/dig/sites"); state.digSites = j.sites || []; state.digMax = j.max || 200; renderDigSites(); paintSuggestedSources(); } catch (e) { $("#digCount").textContent = e.message; }
+}
+async function addDigSite(site, btn) {
+  if (!site) return;
+  if (btn) { btn.disabled = true; btn.dataset.prev = btn.textContent; btn.textContent = "Adding…"; }
+  try {
+    const j = await apiFetch(digBase() + "/api/dig/sites?site=" + encodeURIComponent(site), undefined, "POST");
+    state.digSites = j.sites || state.digSites; renderDigSites(); paintSuggestedSources();
+    toast(`Added ${j.added && j.added.site ? j.added.site : hostOf(site) || site} to dig list`);
+    if (btn) btn.textContent = "On dig list";
+  } catch (e) { toast(e.message); if (btn) { btn.disabled = false; btn.textContent = btn.dataset.prev || "Add"; } }
+}
+async function removeDigSite(site) {
+  try { const j = await apiFetch(digBase() + "/api/dig/sites/remove?site=" + encodeURIComponent(site), undefined, "POST"); state.digSites = j.sites || []; renderDigSites(); paintSuggestedSources(); }
+  catch (e) { toast(e.message); }
+}
+function renderDigSites() {
+  const box = $("#digSites"); box.innerHTML = "";
+  const counts = new Map(); for (const r of state.results.values()) counts.set(r.host, (counts.get(r.host) || 0) + 1);
+  $("#digCount").textContent = `${state.digSites.length} of ${state.digMax} sites`;
+  if (!state.digSites.length) { box.innerHTML = '<div class="saved-empty">No sites yet. Add one above, tap ☆ Save on a result, or tap a suggested source.</div>'; return; }
+  for (const s of state.digSites) {
+    const el = document.createElement("div"); el.className = "saved-item";
+    el.innerHTML = `<a class="si-main" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer"><span class="si-type">Dig site</span><span class="si-q"></span><span class="si-meta"></span></a><span class="si-new zero" title="hits from this site in the current results"></span><button type="button" class="si-del" aria-label="Remove">✕</button>`;
+    const a = el.querySelector("a"); a.href = safeUrl(s.url) || "https://" + s.site + "/";
+    el.querySelector(".si-q").textContent = s.site;
+    el.querySelector(".si-meta").textContent = [s.added ? "added " + ago(Date.parse(s.added) || +s.added) : "", s.note || ""].filter(Boolean).join(" · ");
+    const n = counts.get(s.site) || counts.get("www." + s.site) || 0, nb = el.querySelector(".si-new"); nb.textContent = n; nb.classList.toggle("zero", !n);
+    el.querySelector(".si-del").onclick = () => removeDigSite(s.site);
+    box.appendChild(el);
+  }
+}
+const digDrawer = $("#digDrawer");
+function openDigDrawer(o) { digDrawer.classList.toggle("open", o); digDrawer.setAttribute("aria-hidden", !o); scrim.hidden = !o; if (o) { renderDigSites(); loadDigSites(); } }
+$("#openDig").onclick = () => openDigDrawer(true);
+$("#closeDig").onclick = () => openDigDrawer(false);
+$("#digAdd").onclick = () => { const v = $("#digSite").value.trim(); if (v) addDigSite(/^https?:/.test(v) ? v : "https://" + v, $("#digAdd")).then(() => { $("#digSite").value = ""; $("#digAdd").textContent = "Add site"; $("#digAdd").disabled = false; }); };
+$("#digSite").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("#digAdd").click(); } });
+function toast(msg, action) {
+  const t = $("#toast"); t.hidden = false; t.innerHTML = ""; t.append(document.createTextNode(msg));
+  if (action) { const b = document.createElement("button"); b.type = "button"; b.textContent = action.label; b.onclick = () => { action.run(b); }; t.append(b); }
+  t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => { t.classList.remove("show"); t.hidden = true; }, action ? 6000 : 2200);
+}
+state.savedResults = LS.get("savedResults", []);
+function saveResult(r, btn) {
+  if (!r) return;
+  if (!state.savedResults.find(x => x.url === r.url)) { state.savedResults.unshift({ url: r.url, title: r.title, host: r.host, at: Date.now() }); state.savedResults = state.savedResults.slice(0, 300); LS.set("savedResults", state.savedResults); }
+  if (btn) btn.textContent = "★ Saved";
+  const onList = state.digSites.some(s => s.site === r.host || "www." + s.site === r.host);
+  toast("Result saved", onList ? null : { label: `Add ${r.host} to dig list`, run: b => addDigSite(r.url, b) });
+}
+setTimeout(loadDigSites, 900);
+
+/* -------- similar keyword chips -------- */
+const STOP = new Set("the a an and or of to in on for with by at from is are was be this that it its as your you my me we our new hd video videos free full porn xxx com www http https html php watch part".split(" "));
+function paintSimilarKeywords(r, extra) {
+  const box = $("#similarKeywords"); if (!box) return;
+  const qw = new Set(parseQuery(state.q || "").terms);
+  const score = new Map(), bump = (w, n) => { w = w.toLowerCase().replace(/[^\p{L}\p{N}' -]/gu, "").trim(); if (w.length < 3 || STOP.has(w) || qw.has(w) || /^\d+$/.test(w)) return; score.set(w, (score.get(w) || 0) + n); };
+  for (const t of r.tags || []) bump(t, 5);
+  if (r.creator) bump(r.creator, 4);
+  for (const w of normTxt(r.title).trim().split(" ")) bump(w, 2);
+  for (const x of extra || []) for (const w of normTxt(x).trim().split(" ")) bump(w, 1);
+  const top = [...score].sort((a, b) => b[1] - a[1]).slice(0, 12).map(x => x[0]);
+  box.innerHTML = top.length ? '<span class="lbl">Similar keywords</span>' : "";
+  for (const w of top) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip kw"; b.textContent = w;
+    b.title = "Search for " + w;
+    b.onclick = () => { closeViewer(); qi.value = w; setTimeout(() => runSearch(), 60); };
+    box.appendChild(b);
+  }
+}
+
+/* -------- Timesearch -------- */
+const NOW_Y = new Date().getFullYear();
+state.era = LS.get("era", [1990, NOW_Y]); state.deadOnly = LS.get("deadOnly", false); state.timeSort = LS.get("timeSort", "leasttouched"); state.timeType = LS.get("timeType", "any");
+function timesearchUrl(q, page) {
+  const p = new URLSearchParams({ q: state.phrase && !/"/.test(q) ? `"${q}"` : q, page: String(page), sort: state.timeSort, type: state.timeType });
+  if (state.era[0] > 1990) p.set("from", String(state.era[0]));
+  if (state.era[1] < NOW_Y) p.set("to", String(state.era[1]));
+  if (state.deadOnly) p.set("deadOnly", "1");
+  return digBase() + "/api/timesearch?" + p;
+}
+const fmtDay0 = v => { if (!v) return "—"; const s = String(v); if (/^\d{14}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`; const t = Date.parse(s); return isNaN(t) ? s.slice(0, 10) : new Date(t).toISOString().slice(0, 10); };
+const fmtDay = v => { const d = fmtDay0(v); return d; };
+const SRC_LABEL = { "arquivo.pt": "Arquivo.pt", "archive.org": "Internet Archive", wayback: "Wayback Machine", commoncrawl: "Common Crawl", searxng: "Old-forum pass" };
+function timeKind(u) { if (/viewtopic|showthread|forumdisplay|\/forum|\/board|phpbb|vbulletin|index\.php\?topic=/i.test(u)) return "forum"; if (/\/~|geocities|angelfire|tripod|homestead|fortunecity/i.test(u)) return "personal page"; if (/\/$/.test(u) && /\/(pub|files|downloads?|mirror|ftp)\//i.test(u)) return "open directory"; return ""; }
+function timeCard(r) {
+  const x = r.rawTime || {}, a = x.archive || x;
+  const archived = safeUrl(x.archivedUrl || x.archiveUrl || a.url || a.archivedUrl || ""), original = safeUrl(x.originalUrl || x.original || r.url);
+  const first = x.firstCaptured || x.first || a.first || a.firstCaptured, lastC = x.lastCaptured || x.last || a.last || a.lastCaptured;
+  const caps = x.captureCount ?? x.captures ?? a.captures ?? null;
+  const st = x.status || (x.alive === true ? "alive" : x.alive === false || x.dead ? "dead" : "unknown");
+  const kindLbl = x.type || timeKind(original), src = SRC_LABEL[x.source] || x.source || "";
+  const el = document.createElement("article"); el.className = "card time-card" + (seen.has(r.url) ? " seen" : ""); el.dataset.url = r.url;
+  el.innerHTML = `<div class="tc-stamp ${esc(st)}" title="${st === "unknown" ? "Not probed. Turn on Dead sites only to check whether the original is still up." : ""}">${esc(st === "alive" ? "ALIVE" : st === "dead" ? "DEAD" : "UNCHECKED")}</div>
+    <div class="crumb"><span class="host">${esc(r.host)}</span>${kindLbl ? `<span class="path">${esc(kindLbl)}</span>` : ""}${src ? `<span class="path">via ${esc(src)}</span>` : ""}</div>
+    <h3><a href="${esc(archived || original)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">${highlight(r.title, r.m.hits)}</a></h3>
+    <p>${highlight(r.content, r.m.hits)}</p>
+    <dl class="tc-meta"><div><dt>First captured</dt><dd>${esc(fmtDay(first))}</dd></div><div><dt>Last captured</dt><dd>${esc(fmtDay(lastC))}</dd></div><div><dt>Captures</dt><dd>${caps == null ? "—" : esc(Number(caps).toLocaleString())}</dd></div></dl>
+    <div class="tc-links">${archived ? `<a href="${esc(archived)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">Archived copy</a>` : ""}${original ? `<a href="${esc(original)}" target="_blank" rel="noreferrer noopener" referrerpolicy="no-referrer">Original address</a>` : ""}<button type="button" class="chip" data-dig-add="${esc(original)}">Add site to dig list</button></div>
+    <button type="button" class="copy-link" aria-label="Copy link">Copy</button>`;
+  return el;
+}
+function paintTimeTab() {
+  const on = state.cat === "timesearch";
+  document.body.classList.toggle("timesearch", on);
+  $("#timeControls").hidden = !on;
+  paintSuggestedSources();
+}
+(() => {
+  const f = $("#eraFrom"), t = $("#eraTo"); f.max = t.max = NOW_Y; f.value = state.era[0]; t.value = state.era[1];
+  const paint = () => { $("#eraLabel").textContent = `${state.era[0]} — ${state.era[1] >= NOW_Y ? "now" : state.era[1]}`; };
+  const upd = which => { let a = +f.value, b = +t.value; if (a > b) { if (which === "f") b = a; else a = b; f.value = a; t.value = b; } state.era = [a, b]; LS.set("era", state.era); paint(); };
+  f.oninput = () => upd("f"); t.oninput = () => upd("t");
+  f.onchange = t.onchange = () => { if (state.q && state.cat === "timesearch") requestSearch(); };
+  paint();
+  const d = $("#deadOnly"); d.checked = state.deadOnly; d.onchange = () => { state.deadOnly = d.checked; LS.set("deadOnly", d.checked); if (state.q) requestSearch(); };
+  const s = $("#timeSort"); s.value = state.timeSort; s.onchange = () => { state.timeSort = s.value; LS.set("timeSort", s.value); if (state.q) requestSearch(); };
+  const g = $("#timeTypes"); const pt = () => g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === state.timeType));
+  pt(); g.onclick = e => { const b = e.target.closest("button"); if (!b) return; state.timeType = b.dataset.v; LS.set("timeType", b.dataset.v); pt(); if (state.q) requestSearch(); };
+  paintTimeTab();
+})();
 })();
