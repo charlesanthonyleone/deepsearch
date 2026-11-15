@@ -572,7 +572,8 @@ function normalize(raw, apiPage) {
     thumb: safeUrl(raw.thumbnail || raw.thumbnail_src || raw.img_src || ""),
     img: safeUrl(raw.img_src || raw.image || ""),
     kind: raw.kind === "videos" ? "video" : raw.kind === "images" ? "image" : raw.kind === "web" ? "web" : raw.category === "videos" || raw.template === "videos.html" || raw.length || raw.iframe_src ? "video" : (raw.category === "images" || raw.template === "images.html" || raw.img_src ? "image" : "web"),
-    length: fmtLen(raw.length), match: raw.match || null
+    length: fmtLen(raw.length), match: raw.match || null,
+    creator: String(raw.creator || raw.author || raw.uploader || "").slice(0, 80), tags: Array.isArray(raw.tags) ? raw.tags.filter(t => typeof t === "string").slice(0, 12) : []
   };
 }
 function fmtViews(n) { return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K" : String(n); }
@@ -879,7 +880,7 @@ const hq = new URLSearchParams(location.hash.slice(1)).get("q");
 if (hq) { qi.value = hq; runSearch(); } else if (!state.token && state.apiBase) $("#status").innerHTML = '<span class="warn">Open settings ⚙ and paste your access token to connect.</span>';
 
 /* -------- in-page viewer + more-like-this -------- */
-const canView = r => r && (r.kind === "image" || r.kind === "video" || r.embed || r.proxy || r.thumb || r.img);
+const canView = r => r && (r.kind === "image" || r.kind === "video" || !!r.embed);
 const viewer = { open: false, stack: [], scrollY: 0, closing: false, similarFor: "", similarPage: 1, simAbort: null };
 
 function openViewer(r) {
@@ -957,7 +958,9 @@ async function loadSimilar(r, page, append) {
   viewer.simAbort = ac;
   const cat = (state.cat === "images" || r.kind === "image") ? "images" : (state.cat === "general" && r.kind === "web") ? "web" : "videos";
   try {
-    const p = new URLSearchParams({ url: r.url, title: r.title || "", content: r.content || "", categories: cat, page: String(page) });
+    const p = new URLSearchParams({ url: r.url, title: r.title || "", content: (r.content || "").slice(0, 300), categories: cat, type: cat, site: r.host || "", page: String(page) });
+    if (r.creator) p.set("creator", r.creator);
+    if (r.tags && r.tags.length) p.set("tags", r.tags.join(" ").slice(0, 300));
     const data = await apiFetch(state.apiBase + state.apiPath.replace(/\/search\/?$/, "/similar") + "?" + p, ac.signal);
     if (viewer.similarFor !== r.url) return;
     const rows = (data.results || []).map(x => normalize(x, page)).filter(Boolean);
