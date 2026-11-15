@@ -925,7 +925,9 @@ function renderStage(r) {
     f.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation allow-popups");
     f.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
     f.setAttribute("allowfullscreen", "");
-    f.setAttribute("referrerpolicy", "no-referrer");
+    // YouTube (error 153) and xHamster ("embedding disabled") refuse to play with no Referer at all, so those two
+    // get the bare origin only (never the path or query). Every other player gets no referrer.
+    f.setAttribute("referrerpolicy", /^https:\/\/(www\.youtube-nocookie\.com|xhamster\.com)\//.test(embed) ? "strict-origin" : "no-referrer");
     f.title = r.title || "Video";
     stage.appendChild(f);
     return;
